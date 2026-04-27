@@ -84,6 +84,13 @@ reproducible conda-based environment defined by `pixi.toml`.
 **1. Install pixi**
 
 ```bash
+
+# Optional, set the PIXI_HOME to other folders (default is install to HOME), e.g. /data/pixi
+export PIXI_HOME="/data/pixi"  # if set, please make sure you change the actual path and add to your shell  rc file
+echo "export PIXI_HOME='/data/pixi'" >> ~/.bashrc  # if you are using bash
+echo "export PIXI_HOME='/data/pixi'" >> ~/.zshrc  # if you are using bash
+
+
 curl -fsSL https://pixi.sh/install.sh | sh
 # Re-open your shell or run:
 source ~/.bashrc   # or ~/.zshrc
@@ -92,14 +99,21 @@ source ~/.bashrc   # or ~/.zshrc
 **2. Clone the repository**
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/enhancerinsight.git
-cd enhancerinsight
+git clone https://github.com/chc-code/EnhancerInsight.git
+cd EnhancerInsight
 ```
 
-**3. Create and install the environment**
 
+
+**3. Create and install the environment**
 ```bash
+# if you are using MacOS, need to replace the pixi.toml with pixi.macos.toml
+cp pixi.macos.toml pixi.toml
+
+# install all the packages
 pixi install
+
+
 ```
 
 This reads `pixi.toml` and installs all Python packages, R, and system tools
@@ -108,8 +122,8 @@ This reads `pixi.toml` and installs all Python packages, R, and system tools
 **4. Verify the installation**
 
 ```bash
-pixi run python annoEnhancer_bedtools.py --help
-pixi run python random_walk_rank_regions_v4.py --help
+pixi run python bin/annoEnhancer_bedtools.py --help
+pixi run python bin/random_walk_rank_regions_v4.py --help
 pixi run Rscript -e "library(rmdformats); cat('R env OK\n')"
 ```
 
@@ -145,14 +159,14 @@ brew install bedtools
 ## Reference databases
 
 Reference databases are required for annotation and prioritization and must be
-downloaded separately (~8–10 GB per genome assembly, compressed).
+downloaded separately using below link.
 
-| Assembly | Download |
+| Name | Download |
 |---|---|
-| hg38 | [Link — coming soon] |
-| hg19 | [Link — coming soon] |
-| mm39 | [Link — coming soon] |
-| mm10 | [Link — coming soon] |
+| hg38 | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.hg38.tgz) |
+| hg19 | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.hg19.tgz)|
+| Pre-built RWR network  | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.netwrok.tgz) |
+
 
 After downloading, extract to a directory (referred to as `<refdir>` below):
 
@@ -182,7 +196,7 @@ installation, run the scripts with your system Python/Rscript directly.
 ### 1. Annotation
 
 ```bash
-pixi run python annoEnhancer_bedtools.py \
+pixi run bin/python annoEnhancer_bedtools.py \
     -m hg38 \
     -in input.bed \
     -o MyProject \
@@ -205,7 +219,7 @@ pixi run python annoEnhancer_bedtools.py \
 **Example with all options:**
 
 ```bash
-pixi run python annoEnhancer_bedtools.py \
+pixi run bin/python annoEnhancer_bedtools.py \
     -m hg38 \
     -in regions.bed \
     -o GM12878_H3K27ac \
@@ -222,7 +236,7 @@ pixi run python annoEnhancer_bedtools.py \
 Seeds the network from a GWAS disease/trait. No input score column is required.
 
 ```bash
-pixi run python random_walk_rank_regions_v4.py \
+pixi run python bin/random_walk_rank_regions_v4.py \
     --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
     --disease-trait "Atrial fibrillation" \
     --input-regions input.bed \
@@ -254,7 +268,7 @@ Uses a numeric score in column 5 of the input BED (e.g. −log₁₀(*p*) from G
 as initial node heat. The signal is then propagated through the network.
 
 ```bash
-pixi run python random_walk_rank_regions_v4.py \
+pixi run python bin/random_walk_rank_regions_v4.py \
     --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
     --input-regions input_with_scores.bed \
     --restart 0.3 \

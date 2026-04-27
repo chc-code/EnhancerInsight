@@ -3,6 +3,8 @@
 !*/
 !.gitignore
 !pixi.toml
+!pixi.macos.toml
+!pixi.linux.toml
 !README.md
 !bin/*
 bigfile/
