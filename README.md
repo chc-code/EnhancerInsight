@@ -196,7 +196,7 @@ installation, run the scripts with your system Python/Rscript directly.
 ### 1. Annotation
 
 ```bash
-pixi run bin/python annoEnhancer_bedtools.py \
+pixi run python bin/annoEnhancer_bedtools.py \
     -m hg38 \
     -in input.bed \
     -o MyProject \
@@ -219,7 +219,7 @@ pixi run bin/python annoEnhancer_bedtools.py \
 **Example with all options:**
 
 ```bash
-pixi run bin/python annoEnhancer_bedtools.py \
+pixi run python bin/annoEnhancer_bedtools.py \
     -m hg38 \
     -in regions.bed \
     -o GM12878_H3K27ac \
@@ -298,7 +298,7 @@ before running RWR. Available cell types correspond to the `.npz` files in the
 `edge_override/` directory.
 
 ```bash
-pixi run python random_walk_rank_regions_dynamic.py \
+pixi run python bin/random_walk_rank_regions_dynamic.py \
     --base-edges   /path/to/dbscATAC_edgeprep_compact.base_edges.npz \
     --edge-override /path/to/dbscATAC_edgeprep_compact.edge_override/Cardiomyocyte.npz \
     --nodes-index  /path/to/node_specificity_dbscATAC.nodes.tsv \
