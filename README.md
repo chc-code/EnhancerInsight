@@ -119,7 +119,7 @@ brew install bedtools
 ## Reference databases
 
 Reference databases are required for annotation and prioritization and must be
-downloaded separately using below link.
+downloaded separately using the links below.
 
 | Name | Download |
 |---|---|
@@ -239,7 +239,7 @@ dependency. It includes:
 
 ### 3. Prioritization — Mode 1: trait-guided
 
-Seeds the network from a GWAS disease/trait. No input score column is required.
+Enhancers are prioritized based on their network proximity to trait-associated signals. A selected disease or trait defines seed nodes; these are propagated via RWR. No input score required.
 
 ```bash
 pixi run python bin/random_walk_rank_regions_v4.py \
@@ -268,10 +268,9 @@ pixi run python bin/random_walk_rank_regions_v4.py \
 
 ---
 
-### 4. Prioritization — Mode 2A: input signal
+### 4. Prioritization — Mode 2A: input signal-guided
 
-Uses a numeric score in column 5 of the input BED (e.g. −log₁₀(*p*) from GWAS)
-as initial node heat. The signal is then propagated through the network.
+Each input region's score (e.g., GWAS −log₁₀(p-value)) is used as initial node heat. Signal is diffused through the network for context-aware ranking.
 
 ```bash
 pixi run python bin/random_walk_rank_regions_v4.py \
@@ -299,8 +298,7 @@ chr8    127742018 127744200 region_003    13.70
 
 ### 5. Prioritization — Mode 2B: cell-type specific
 
-Reweights the base network with cell-type-specific scATAC-seq edge weights
-before running RWR. Available cell types correspond to the `.npz` files in the
+A selected cell type is used to reweight the base network using scATAC-seq chromatin accessibility. Signal propagation identifies enhancers active in the chosen cellular context. Available cell types correspond to the `.npz` files in the
 `edge_override/` directory.
 
 ```bash
