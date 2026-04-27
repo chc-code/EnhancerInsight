@@ -191,104 +191,7 @@ pixi run python bin/annoEnhancer_bedtools.py \
 
 ---
 
-### 2. Prioritization — Mode 1: trait-guided
-
-Seeds the network from a GWAS disease/trait. No input score column is required.
-
-```bash
-pixi run python bin/random_walk_rank_regions_v4.py \
-    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
-    --disease-trait "Atrial fibrillation" \
-    --input-regions input.bed \
-    --restart 0.5 \
-    --tol 1e-7 \
-    --max-iter 100 \
-    --combine-overlaps max \
-    --output ranked_output.tsv
-```
-
-**All options:**
-
-| Flag | Default | Required | Description |
-|---|---|---|---|
-| `--network` | — | **yes** | Pre-built network file (.gpickle) |
-| `--disease-trait` | — | **yes** | GWAS trait keyword to use as seed (must match trait name in network) |
-| `--input-regions` | — | **yes** | Input BED file |
-| `--restart` | `0.5` | no | RWR restart probability (0–1). Higher = stronger return to seed nodes |
-| `--tol` | `1e-7` | no | Convergence tolerance |
-| `--max-iter` | `100` | no | Maximum RWR iterations |
-| `--combine-overlaps` | `max` | no | How to combine scores when a region overlaps multiple nodes: `max`, `mean`, `sum` |
-| `--output` | — | **yes** | Output TSV file path |
-
----
-
-### 3. Prioritization — Mode 2A: input signal
-
-Uses a numeric score in column 5 of the input BED (e.g. −log₁₀(*p*) from GWAS)
-as initial node heat. The signal is then propagated through the network.
-
-```bash
-pixi run python bin/random_walk_rank_regions_v4.py \
-    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
-    --input-regions input_with_scores.bed \
-    --restart 0.3 \
-    --tol 1e-7 \
-    --max-iter 100 \
-    --combine-overlaps max \
-    --output ranked_output.tsv
-```
-
-The input BED should have a score in column 5 (no `--disease-trait` flag):
-
-```
-chr1    713441    714434    region_001    24.15
-chr2    208245102 208246500 region_002    29.00
-chr8    127742018 127744200 region_003    13.70
-```
-
-> **Note:** A restart probability of `0.3` (vs. `0.5` for Mode 1) is recommended
-> to allow broader diffusion from sparse input seed nodes.
-
----
-
-### 4. Prioritization — Mode 2B: cell-type specific
-
-Reweights the base network with cell-type-specific scATAC-seq edge weights
-before running RWR. Available cell types correspond to the `.npz` files in the
-`edge_override/` directory.
-
-```bash
-pixi run python bin/random_walk_rank_regions_dynamic.py \
-    --base-edges   /path/to/dbscATAC_edgeprep_compact.base_edges.npz \
-    --edge-override /path/to/dbscATAC_edgeprep_compact.edge_override/Cardiomyocyte.npz \
-    --nodes-index  /path/to/node_specificity_dbscATAC.nodes.tsv \
-    --input-regions input.bed \
-    --restart 0.5 \
-    --combine-overlaps max \
-    --output ranked_cardiomyocyte.tsv
-```
-
-**All options:**
-
-| Flag | Required | Description |
-|---|---|---|
-| `--base-edges` | **yes** | Base regulatory network edge matrix (.npz) |
-| `--edge-override` | **yes** | Cell-type-specific edge weight matrix (.npz) |
-| `--nodes-index` | **yes** | Node ID ↔ index mapping (.tsv) |
-| `--input-regions` | **yes** | Input BED file (score in col 5 used if present) |
-| `--restart` | no | RWR restart probability (default: `0.5`) |
-| `--combine-overlaps` | no | Score combination strategy (default: `max`) |
-| `--output` | **yes** | Output TSV file path |
-
-**List available cell types:**
-
-```bash
-ls /path/to/dbscATAC_edgeprep_compact.edge_override/*.npz | xargs -n1 basename | sed 's/.npz//'
-```
-
----
-
-### 5. Generating the HTML report
+### 2. Generating annotation report
 
 After running annotation, generate the interactive HTML report using the
 provided R Markdown template:
@@ -331,6 +234,103 @@ dependency. It includes:
    (five assignment methods: closest, 50 kb, FANTOM5, validated, eQTL)
 6. **GWAS SNP enrichment** — trait-level Jaccard index table
 7. **GTEx eQTL enrichment** — tissue-level Jaccard index table
+
+---
+
+### 3. Prioritization — Mode 1: trait-guided
+
+Seeds the network from a GWAS disease/trait. No input score column is required.
+
+```bash
+pixi run python bin/random_walk_rank_regions_v4.py \
+    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
+    --disease-trait "Atrial fibrillation" \
+    --input-regions input.bed \
+    --restart 0.5 \
+    --tol 1e-7 \
+    --max-iter 100 \
+    --combine-overlaps max \
+    --output ranked_output.tsv
+```
+
+**All options:**
+
+| Flag | Default | Required | Description |
+|---|---|---|---|
+| `--network` | — | **yes** | Pre-built network file (.gpickle) |
+| `--disease-trait` | — | **yes** | GWAS trait keyword to use as seed (must match trait name in network) |
+| `--input-regions` | — | **yes** | Input BED file |
+| `--restart` | `0.5` | no | RWR restart probability (0–1). Higher = stronger return to seed nodes |
+| `--tol` | `1e-7` | no | Convergence tolerance |
+| `--max-iter` | `100` | no | Maximum RWR iterations |
+| `--combine-overlaps` | `max` | no | How to combine scores when a region overlaps multiple nodes: `max`, `mean`, `sum` |
+| `--output` | — | **yes** | Output TSV file path |
+
+---
+
+### 4. Prioritization — Mode 2A: input signal
+
+Uses a numeric score in column 5 of the input BED (e.g. −log₁₀(*p*) from GWAS)
+as initial node heat. The signal is then propagated through the network.
+
+```bash
+pixi run python bin/random_walk_rank_regions_v4.py \
+    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
+    --input-regions input_with_scores.bed \
+    --restart 0.3 \
+    --tol 1e-7 \
+    --max-iter 100 \
+    --combine-overlaps max \
+    --output ranked_output.tsv
+```
+
+The input BED should have a score in column 5 (no `--disease-trait` flag):
+
+```
+chr1    713441    714434    region_001    24.15
+chr2    208245102 208246500 region_002    29.00
+chr8    127742018 127744200 region_003    13.70
+```
+
+> **Note:** A restart probability of `0.3` (vs. `0.5` for Mode 1) is recommended
+> to allow broader diffusion from sparse input seed nodes.
+
+---
+
+### 5. Prioritization — Mode 2B: cell-type specific
+
+Reweights the base network with cell-type-specific scATAC-seq edge weights
+before running RWR. Available cell types correspond to the `.npz` files in the
+`edge_override/` directory.
+
+```bash
+pixi run python bin/random_walk_rank_regions_dynamic.py \
+    --base-edges   /path/to/dbscATAC_edgeprep_compact.base_edges.npz \
+    --edge-override /path/to/dbscATAC_edgeprep_compact.edge_override/Cardiomyocyte.npz \
+    --nodes-index  /path/to/node_specificity_dbscATAC.nodes.tsv \
+    --input-regions input.bed \
+    --restart 0.5 \
+    --combine-overlaps max \
+    --output ranked_cardiomyocyte.tsv
+```
+
+**All options:**
+
+| Flag | Required | Description |
+|---|---|---|
+| `--base-edges` | **yes** | Base regulatory network edge matrix (.npz) |
+| `--edge-override` | **yes** | Cell-type-specific edge weight matrix (.npz) |
+| `--nodes-index` | **yes** | Node ID ↔ index mapping (.tsv) |
+| `--input-regions` | **yes** | Input BED file (score in col 5 used if present) |
+| `--restart` | no | RWR restart probability (default: `0.5`) |
+| `--combine-overlaps` | no | Score combination strategy (default: `max`) |
+| `--output` | **yes** | Output TSV file path |
+
+**List available cell types:**
+
+```bash
+ls /path/to/dbscATAC_edgeprep_compact.edge_override/*.npz | xargs -n1 basename | sed 's/.npz//'
+```
 
 ---
 
