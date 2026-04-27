@@ -88,7 +88,7 @@ reproducible conda-based environment defined by `pixi.toml`.
 # Optional, set the PIXI_HOME to other folders (default is install to HOME), e.g. /data/pixi
 export PIXI_HOME="/data/pixi"  # if set, please make sure you change the actual path and add to your shell  rc file
 echo "export PIXI_HOME='/data/pixi'" >> ~/.bashrc  # if you are using bash
-echo "export PIXI_HOME='/data/pixi'" >> ~/.zshrc  # if you are using bash
+echo "export PIXI_HOME='/data/pixi'" >> ~/.zshrc  # if you are using zsh
 
 
 curl -fsSL https://pixi.sh/install.sh | sh
