@@ -1,19 +1,14 @@
 # EnhancerInsight
 
-**EnhancerInsight** is a toolkit for the systematic annotation and network-based
-functional prioritization of candidate enhancer regions from genomic coordinates
-(BED format). It integrates multi-layer regulatory evidence — epigenomic marks,
-transcription factor binding, target gene assignment, GWAS/eQTL variants, and
-single-cell chromatin accessibility — to support context-aware interpretation and
-ranking of cis-regulatory elements.
+**EnhancerInsight** is a platform for high-resolution, context-aware annotation and prioritization of candidate enhancers.
+By integrating single-cell and multi-omics data, it reveals cell-type–specific regulatory activity and reconstructs enhancer-centered regulatory context, including TF programs, enhancer–gene links, and variant associations. A network-based prioritization framework enables ranking of candidate regions using traits, cell types, or custom scores, supporting biologically informed discovery in disease-relevant contexts.
 
-A web server is available at **https://www.6157777.xyz/enhancerinsight/**.
+EnhancerInsight is available both as a web server for easy access and a standalone toolkit for large-scale or customized analyses. The web server is available at **https://www.6157777.xyz/enhancerinsight/**.
 
 ---
 
 ## Table of Contents
 
-- [Overview](#overview)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Reference databases](#reference-databases)
@@ -27,41 +22,6 @@ A web server is available at **https://www.6157777.xyz/enhancerinsight/**.
 - [Input format](#input-format)
 - [Citation](#citation)
 - [License](#license)
-
----
-
-## Overview
-
-EnhancerInsight consists of two main analysis modules:
-
-### Annotation (`annoEnhancer_bedtools.py`)
-
-Each input region is annotated with:
-
-| Layer | Source |
-|---|---|
-| Genomic feature (promoter-TSS / intron / intergenic / …) | NCBI RefSeq |
-| Nearest gene and genes within 50 kb | RefSeq TSS table |
-| Super-enhancer support | SEdb 2.0, dbSUPER |
-| Enhancer database support | HACER, VISTA, RAEdb, Ensembl Regulatory Build, ENCODE ChromHMM, NIH Roadmap |
-| Experimentally validated target genes | Curated literature |
-| FANTOM5 enhancer–TSS target genes | FANTOM5 Phase 2 |
-| TF binding sites | ENCODE TFBS (cell line × TF) |
-| GWAS variants | NHGRI-EBI GWAS Catalog |
-| eQTL variants | GTEx v10 |
-
-Results are rendered as a self-contained interactive HTML report via R Markdown.
-
-### Prioritization (`random_walk_rank_regions_v4.py`, `random_walk_rank_regions_dynamic.py`)
-
-Ranks input regions using **random walk with restart (RWR)** on a pre-built
-enhancer–gene–disease interaction network. Three modes are supported:
-
-| Mode | Script | Use case |
-|---|---|---|
-| 1 — Trait-guided | `random_walk_rank_regions_v4.py` | No region-level scores; seed from a GWAS disease trait |
-| 2A — Input signal | `random_walk_rank_regions_v4.py` | Region scores (e.g. GWAS −log₁₀ *p*) used as node heat |
-| 2B — Cell-type specific | `random_walk_rank_regions_dynamic.py` | scATAC-seq edge weights reweight the network for a chosen cell type |
 
 ---
 
@@ -159,7 +119,7 @@ brew install bedtools
 ## Reference databases
 
 Reference databases are required for annotation and prioritization and must be
-downloaded separately using below link.
+downloaded separately using the links below.
 
 | Name | Download |
 |---|---|
@@ -231,104 +191,7 @@ pixi run python bin/annoEnhancer_bedtools.py \
 
 ---
 
-### 2. Prioritization — Mode 1: trait-guided
-
-Seeds the network from a GWAS disease/trait. No input score column is required.
-
-```bash
-pixi run python bin/random_walk_rank_regions_v4.py \
-    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
-    --disease-trait "Atrial fibrillation" \
-    --input-regions input.bed \
-    --restart 0.5 \
-    --tol 1e-7 \
-    --max-iter 100 \
-    --combine-overlaps max \
-    --output ranked_output.tsv
-```
-
-**All options:**
-
-| Flag | Default | Required | Description |
-|---|---|---|---|
-| `--network` | — | **yes** | Pre-built network file (.gpickle) |
-| `--disease-trait` | — | **yes** | GWAS trait keyword to use as seed (must match trait name in network) |
-| `--input-regions` | — | **yes** | Input BED file |
-| `--restart` | `0.5` | no | RWR restart probability (0–1). Higher = stronger return to seed nodes |
-| `--tol` | `1e-7` | no | Convergence tolerance |
-| `--max-iter` | `100` | no | Maximum RWR iterations |
-| `--combine-overlaps` | `max` | no | How to combine scores when a region overlaps multiple nodes: `max`, `mean`, `sum` |
-| `--output` | — | **yes** | Output TSV file path |
-
----
-
-### 3. Prioritization — Mode 2A: input signal
-
-Uses a numeric score in column 5 of the input BED (e.g. −log₁₀(*p*) from GWAS)
-as initial node heat. The signal is then propagated through the network.
-
-```bash
-pixi run python bin/random_walk_rank_regions_v4.py \
-    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
-    --input-regions input_with_scores.bed \
-    --restart 0.3 \
-    --tol 1e-7 \
-    --max-iter 100 \
-    --combine-overlaps max \
-    --output ranked_output.tsv
-```
-
-The input BED should have a score in column 5 (no `--disease-trait` flag):
-
-```
-chr1    713441    714434    region_001    24.15
-chr2    208245102 208246500 region_002    29.00
-chr8    127742018 127744200 region_003    13.70
-```
-
-> **Note:** A restart probability of `0.3` (vs. `0.5` for Mode 1) is recommended
-> to allow broader diffusion from sparse input seed nodes.
-
----
-
-### 4. Prioritization — Mode 2B: cell-type specific
-
-Reweights the base network with cell-type-specific scATAC-seq edge weights
-before running RWR. Available cell types correspond to the `.npz` files in the
-`edge_override/` directory.
-
-```bash
-pixi run python bin/random_walk_rank_regions_dynamic.py \
-    --base-edges   /path/to/dbscATAC_edgeprep_compact.base_edges.npz \
-    --edge-override /path/to/dbscATAC_edgeprep_compact.edge_override/Cardiomyocyte.npz \
-    --nodes-index  /path/to/node_specificity_dbscATAC.nodes.tsv \
-    --input-regions input.bed \
-    --restart 0.5 \
-    --combine-overlaps max \
-    --output ranked_cardiomyocyte.tsv
-```
-
-**All options:**
-
-| Flag | Required | Description |
-|---|---|---|
-| `--base-edges` | **yes** | Base regulatory network edge matrix (.npz) |
-| `--edge-override` | **yes** | Cell-type-specific edge weight matrix (.npz) |
-| `--nodes-index` | **yes** | Node ID ↔ index mapping (.tsv) |
-| `--input-regions` | **yes** | Input BED file (score in col 5 used if present) |
-| `--restart` | no | RWR restart probability (default: `0.5`) |
-| `--combine-overlaps` | no | Score combination strategy (default: `max`) |
-| `--output` | **yes** | Output TSV file path |
-
-**List available cell types:**
-
-```bash
-ls /path/to/dbscATAC_edgeprep_compact.edge_override/*.npz | xargs -n1 basename | sed 's/.npz//'
-```
-
----
-
-### 5. Generating the HTML report
+### 2. Generating annotation report
 
 After running annotation, generate the interactive HTML report using the
 provided R Markdown template:
@@ -371,6 +234,101 @@ dependency. It includes:
    (five assignment methods: closest, 50 kb, FANTOM5, validated, eQTL)
 6. **GWAS SNP enrichment** — trait-level Jaccard index table
 7. **GTEx eQTL enrichment** — tissue-level Jaccard index table
+
+---
+
+### 3. Prioritization — Mode 1: trait-guided
+
+Enhancers are prioritized based on their network proximity to trait-associated signals. A selected disease or trait defines seed nodes; these are propagated via RWR. No input score required.
+
+```bash
+pixi run python bin/random_walk_rank_regions_v4.py \
+    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
+    --disease-trait "Atrial fibrillation" \
+    --input-regions input.bed \
+    --restart 0.5 \
+    --tol 1e-7 \
+    --max-iter 100 \
+    --combine-overlaps max \
+    --output ranked_output.tsv
+```
+
+**All options:**
+
+| Flag | Default | Required | Description |
+|---|---|---|---|
+| `--network` | — | **yes** | Pre-built network file (.gpickle) |
+| `--disease-trait` | — | **yes** | GWAS trait keyword to use as seed (must match trait name in network) |
+| `--input-regions` | — | **yes** | Input BED file |
+| `--restart` | `0.5` | no | RWR restart probability (0–1). Higher = stronger return to seed nodes |
+| `--tol` | `1e-7` | no | Convergence tolerance |
+| `--max-iter` | `100` | no | Maximum RWR iterations |
+| `--combine-overlaps` | `max` | no | How to combine scores when a region overlaps multiple nodes: `max`, `mean`, `sum` |
+| `--output` | — | **yes** | Output TSV file path |
+
+---
+
+### 4. Prioritization — Mode 2A: input signal-guided
+
+Each input region's score (e.g., GWAS −log₁₀(p-value)) is used as initial node heat. Signal is diffused through the network for context-aware ranking.
+
+```bash
+pixi run python bin/random_walk_rank_regions_v4.py \
+    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
+    --input-regions input_with_scores.bed \
+    --restart 0.3 \
+    --tol 1e-7 \
+    --max-iter 100 \
+    --combine-overlaps max \
+    --output ranked_output.tsv
+```
+
+The input BED should have a score in column 5 (no `--disease-trait` flag):
+
+```
+chr1    713441    714434    region_001    24.15
+chr2    208245102 208246500 region_002    29.00
+chr8    127742018 127744200 region_003    13.70
+```
+
+> **Note:** A restart probability of `0.3` (vs. `0.5` for Mode 1) is recommended
+> to allow broader diffusion from sparse input seed nodes.
+
+---
+
+### 5. Prioritization — Mode 2B: cell-type specific
+
+A selected cell type is used to reweight the base network using scATAC-seq chromatin accessibility. Signal propagation identifies enhancers active in the chosen cellular context. Available cell types correspond to the `.npz` files in the
+`edge_override/` directory.
+
+```bash
+pixi run python bin/random_walk_rank_regions_dynamic.py \
+    --base-edges   /path/to/dbscATAC_edgeprep_compact.base_edges.npz \
+    --edge-override /path/to/dbscATAC_edgeprep_compact.edge_override/Cardiomyocyte.npz \
+    --nodes-index  /path/to/node_specificity_dbscATAC.nodes.tsv \
+    --input-regions input.bed \
+    --restart 0.5 \
+    --combine-overlaps max \
+    --output ranked_cardiomyocyte.tsv
+```
+
+**All options:**
+
+| Flag | Required | Description |
+|---|---|---|
+| `--base-edges` | **yes** | Base regulatory network edge matrix (.npz) |
+| `--edge-override` | **yes** | Cell-type-specific edge weight matrix (.npz) |
+| `--nodes-index` | **yes** | Node ID ↔ index mapping (.tsv) |
+| `--input-regions` | **yes** | Input BED file (score in col 5 used if present) |
+| `--restart` | no | RWR restart probability (default: `0.5`) |
+| `--combine-overlaps` | no | Score combination strategy (default: `max`) |
+| `--output` | **yes** | Output TSV file path |
+
+**List available cell types:**
+
+```bash
+ls /path/to/dbscATAC_edgeprep_compact.edge_override/*.npz | xargs -n1 basename | sed 's/.npz//'
+```
 
 ---
 
