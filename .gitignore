@@ -2,6 +2,7 @@
 
 !*/
 !.gitignore
+!pixi.toml
 !README.md
 !bin/*
 bigfile/
