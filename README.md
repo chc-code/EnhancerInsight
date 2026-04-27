@@ -450,11 +450,7 @@ chr8    127742018 127744200 region_002    13.70
 
 ## Citation
 
-If you use EnhancerInsight in your research, please cite:
-
-> Author et al. (2025) EnhancerInsight: a comprehensive platform for enhancer
-> annotation and functional prioritization. *Bioinformatics*.
-> doi:10.1093/bioinformatics/xxxxx
+To be published...
 
 ---
 
