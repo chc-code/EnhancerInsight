@@ -165,7 +165,7 @@ downloaded separately using below link.
 |---|---|
 | hg38 | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.hg38.tgz) |
 | hg19 | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.hg19.tgz)|
-| Pre-built RWR network  | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.netwrok.tgz) |
+| Pre-built RWR network  | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.network.tgz) |
 
 
 After downloading, extract to a directory (referred to as `<refdir>` below):
