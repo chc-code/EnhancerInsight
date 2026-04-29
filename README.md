@@ -3,7 +3,7 @@
 **EnhancerInsight** is a platform for high-resolution, context-aware annotation and prioritization of candidate enhancers.
 By integrating single-cell and multi-omics data, it reveals cell-type–specific regulatory activity and reconstructs enhancer-centered regulatory context, including TF programs, enhancer–gene links, and variant associations. A network-based prioritization framework enables ranking of candidate regions using traits, cell types, or custom scores, supporting biologically informed discovery in disease-relevant contexts.
 
-EnhancerInsight is available both as a web server for easy access and a standalone toolkit for large-scale or customized analyses. The web server is available at **https://www.6157777.xyz/enhancerinsight/**.
+EnhancerInsight is available both as a web server for easy access and a standalone toolkit for large-scale or customized analyses. The web server is available at **https://bioinfo.vanderbilt.edu/enhancerinsight/**.
 
 ---
 
