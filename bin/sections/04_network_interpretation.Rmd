@@ -39,6 +39,19 @@ if (is.null(top) || nrow(top) == 0) {
       cat("Network node/edge files were not found.\n\n")
       next
     }
+
+    # A candidate can legitimately have no seed reachable within the selected
+    # two-hop path limit.  Do not attempt to fread an empty edge file.
+    n_edges_i <- suppressWarnings(as.numeric(ns$NumberEdges[[1]]))
+    if (is.finite(n_edges_i) && n_edges_i <= 0) {
+      cat("No focal-to-seed network was available within 2 hops.\n\n")
+      next
+    }
+    if (file.info(edges_file)$size <= 0) {
+      cat("No focal-to-seed network was available within 2 hops.\n\n")
+      next
+    }
+
     nodes_i <- data.table::fread(nodes_file, data.table = FALSE)
     edges_i <- data.table::fread(edges_file, data.table = FALSE)
     seeds_i <- if (!is.null(seed_df)) seed_df %>% filter(region == region_i) else NULL

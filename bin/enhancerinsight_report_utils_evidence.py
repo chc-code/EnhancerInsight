@@ -38,6 +38,8 @@ from collections import defaultdict, deque
 
 import numpy as np
 import pandas as pd
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
 
 COORD_RE = re.compile(r"^(chr[^:]+):(\d+)-(\d+)$")
 
@@ -553,137 +555,479 @@ def _seed_color_map(seed_vector: Sequence[float]) -> Dict[int, str]:
     return {int(i): _blend_hex("#C6DBEF", "#08519C", 0.15 + 0.85*float(s)) for i,s in zip(idx,scaled)}
 
 
-# explicit columns: a candidate without any path edge must still get a header row,
-# otherwise the R report cannot read the empty file
-NETWORK_NODE_COLUMNS = ["node_id", "label", "gene_id", "gene_name", "role", "initial_heat", "node_color", "node_size", "node_shape"]
-STATIC_EDGE_COLUMNS = ["source", "target", "weight", "edge_type"]
-DYNAMIC_EDGE_COLUMNS = ["source", "target", "base_weight", "dynamic_weight", "modifier", "edge_type"]
+def _raw_seed_heat_from_report_inputs(
+    inputs: pd.DataFrame,
+    node_to_idx: Mapping[str, int],
+    n_nodes: int,
+    excluded_focal_idxs: Optional[Iterable[int]] = None,
+    fallback_seed_vector: Optional[Sequence[float]] = None,
+) -> np.ndarray:
+    """Rebuild raw input heat exactly as the standalone network exporters do.
+
+    Each scored input region contributes its *raw* input score, split equally
+    among all unique overlapped network nodes. Contributions from different
+    input regions are summed.  For a focal candidate, any input region that
+    overlaps one of the focal nodes can be excluded from the non-focal seed set.
+
+    This function intentionally does NOT use the normalized RWR restart vector
+    for visualization seed discovery.  The standalone exporters reconstruct
+    seeds from the original region-to-node mapping, and the report network must
+    follow the same rule.
+    """
+    heat = np.zeros(int(n_nodes), dtype=float)
+    focal = set(int(x) for x in (excluded_focal_idxs or []))
+
+    has_scores = (
+        isinstance(inputs, pd.DataFrame)
+        and "input_score" in inputs.columns
+        and pd.to_numeric(inputs["input_score"], errors="coerce").notna().any()
+        and "overlapped_nodes" in inputs.columns
+    )
+
+    if has_scores:
+        for _, row in inputs.iterrows():
+            score = _safe_float(row.get("input_score"), np.nan)
+            if not np.isfinite(score) or score <= 0:
+                continue
+            idxs = sorted({
+                int(node_to_idx[str(n)])
+                for n in _split_semicolon(row.get("overlapped_nodes", ""))
+                if str(n) in node_to_idx
+            })
+            if not idxs:
+                continue
+            # Match standalone behavior: if this input region maps to ANY focal
+            # node, exclude the whole input region from the non-focal seed heat.
+            if focal and focal.intersection(idxs):
+                continue
+            share = float(score) / float(len(idxs))
+            for idx in idxs:
+                heat[idx] += share
+        return heat
+
+    # Backward-compatible fallback for seed modes without input scores.
+    if fallback_seed_vector is not None:
+        arr = np.asarray(fallback_seed_vector, dtype=float).reshape(-1)
+        if len(arr) == int(n_nodes):
+            arr = arr.copy()
+            arr[~np.isfinite(arr)] = 0.0
+            arr[arr < 0] = 0.0
+            if focal:
+                arr[list(focal)] = 0.0
+            return arr
+    return heat
 
 
-def _export_static_networks(report_dir, top, G, node_score_map, top_network_n, max_neighbors_per_node,
-                            seed_vector=None, node_list=None, node_attributes=None, max_hops=2):
-    network_dir = _mkdir(report_dir / "network"); rows_summary = []
+def _build_path_cost_graph(
+    n_nodes: int,
+    u_idx: np.ndarray,
+    v_idx: np.ndarray,
+    edge_weight: np.ndarray,
+    metric: str = "inverse_weight",
+) -> csr_matrix:
+    """Sparse undirected path-cost graph matching the standalone exporters."""
+    uu = np.asarray(u_idx, dtype=int)
+    vv = np.asarray(v_idx, dtype=int)
+    ww = np.asarray(edge_weight, dtype=float)
+    positive = np.isfinite(ww) & (ww > 0)
+    uu, vv, ww = uu[positive], vv[positive], ww[positive]
+    if metric == "inverse_weight":
+        cost = 1.0 / np.maximum(ww, 1e-12)
+    elif metric == "hops":
+        cost = np.ones_like(ww, dtype=float)
+    else:
+        raise ValueError(f"Unknown path metric: {metric}")
+    rows = np.concatenate([uu, vv])
+    cols = np.concatenate([vv, uu])
+    data = np.concatenate([cost, cost])
+    return csr_matrix((data, (rows, cols)), shape=(int(n_nodes), int(n_nodes)))
+
+
+def _reconstruct_standalone_path(target_idx: int, predecessors: np.ndarray, focal_set: set[int]) -> Optional[List[int]]:
+    path = [int(target_idx)]
+    cur = int(target_idx)
+    seen = {cur}
+    while cur not in focal_set:
+        prev = int(predecessors[cur])
+        if prev == -9999:
+            return None
+        if prev in seen:
+            return None
+        path.append(prev)
+        seen.add(prev)
+        cur = prev
+    path.reverse()
+    return path
+
+
+def _extract_standalone_paths(
+    n_nodes: int,
+    u_idx: np.ndarray,
+    v_idx: np.ndarray,
+    edge_weight: np.ndarray,
+    focal_idxs: Sequence[int],
+    seed_idxs: Sequence[int],
+    max_hops: Optional[int] = 2,
+    metric: str = "inverse_weight",
+) -> Dict[int, Dict[str, Any]]:
+    """Exact standalone logic: weighted best path first, then max-hop filter."""
+    if not focal_idxs or not seed_idxs:
+        return {}
+    cost_graph = _build_path_cost_graph(n_nodes, u_idx, v_idx, edge_weight, metric)
+    dist, predecessors, sources = dijkstra(
+        cost_graph,
+        directed=False,
+        indices=np.asarray(list(focal_idxs), dtype=np.int32),
+        return_predecessors=True,
+        min_only=True,
+    )
+    focal_set = set(int(x) for x in focal_idxs)
+    paths: Dict[int, Dict[str, Any]] = {}
+    for seed_idx in seed_idxs:
+        seed_idx = int(seed_idx)
+        if not np.isfinite(dist[seed_idx]) or int(sources[seed_idx]) == -9999:
+            continue
+        path = _reconstruct_standalone_path(seed_idx, predecessors, focal_set)
+        if path is None:
+            continue
+        if max_hops is not None and (len(path) - 1) > int(max_hops):
+            continue
+        paths[seed_idx] = {
+            "path": path,
+            "distance": float(dist[seed_idx]),
+            "source_focal_idx": int(sources[seed_idx]),
+        }
+    return paths
+
+
+def _path_nodes_and_pairs(paths: Mapping[int, Mapping[str, Any]]) -> Tuple[set[int], set[Tuple[int, int]]]:
+    nodes: set[int] = set()
+    pairs: set[Tuple[int, int]] = set()
+    for info in paths.values():
+        p = [int(x) for x in info.get("path", [])]
+        nodes.update(p)
+        for a, b in zip(p[:-1], p[1:]):
+            pairs.add((min(a, b), max(a, b)))
+    return nodes, pairs
+
+
+def _edge_records_for_path_pairs(
+    path_pairs: set[Tuple[int, int]],
+    u_idx: np.ndarray,
+    v_idx: np.ndarray,
+    primary_weight: np.ndarray,
+    base_weight: Optional[np.ndarray] = None,
+    modifier_by_edge: Optional[np.ndarray] = None,
+) -> List[Dict[str, Any]]:
+    """Keep the strongest compressed edge for every selected node pair."""
+    if not path_pairs:
+        return []
+    best: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    pw = np.asarray(primary_weight, dtype=float)
+    bw = np.asarray(base_weight, dtype=float) if base_weight is not None else None
+    mod = np.asarray(modifier_by_edge, dtype=float) if modifier_by_edge is not None else None
+    for ei, (u, v) in enumerate(zip(np.asarray(u_idx, dtype=int), np.asarray(v_idx, dtype=int))):
+        key = (min(int(u), int(v)), max(int(u), int(v)))
+        if key not in path_pairs:
+            continue
+        rec = {
+            "edge_index": int(ei),
+            "u_idx": int(u),
+            "v_idx": int(v),
+            "weight": float(pw[ei]),
+        }
+        if bw is not None:
+            rec["base_weight"] = float(bw[ei])
+            rec["dynamic_weight"] = float(pw[ei])
+        if mod is not None and ei < len(mod):
+            rec["modifier"] = float(mod[ei]) if np.isfinite(mod[ei]) else ""
+        if key not in best or rec["weight"] > best[key]["weight"]:
+            best[key] = rec
+    return list(best.values())
+
+
+def _seed_color_from_raw_heat(displayed_idxs: Sequence[int], heat_values: np.ndarray) -> Dict[int, str]:
+    idxs = [int(i) for i in displayed_idxs]
+    if not idxs:
+        return {}
+    vals = np.asarray([float(heat_values[i]) for i in idxs], dtype=float)
+    lo, hi = float(np.nanmin(vals)), float(np.nanmax(vals))
+    scaled = np.full(len(vals), 0.5, dtype=float) if hi <= lo else (vals - lo) / (hi - lo)
+    return {
+        idx: _blend_hex("#C6DBEF", "#08519C", 0.15 + 0.85 * float(z))
+        for idx, z in zip(idxs, scaled)
+    }
+
+
+def _export_static_networks(
+    report_dir, top, G, node_score_map, top_network_n, max_neighbors_per_node,
+    seed_vector=None, node_list=None, node_attributes=None, max_hops=2,
+    report_inputs: Optional[pd.DataFrame] = None,
+):
+    """Export Mode2A focal-to-seed subnetworks using standalone logic."""
+    network_dir = _mkdir(report_dir / "network")
+    rows_summary: List[Dict[str, Any]] = []
+    summary_cols = ["Rank", "Region", "NodesFile", "EdgesFile", "NumberNodes", "NumberEdges"]
+    node_cols = ["node_id", "label", "gene_id", "gene_name", "role", "initial_heat", "node_color", "node_size", "node_shape", "path_distance", "path_hops", "gwas_snps", "gwas_disease_traits"]
+    edge_cols = ["source", "target", "weight", "edge_type"]
+
     if G is None or top_network_n <= 0:
-        _write_empty_tsv(report_dir / "network_summary.tsv", ["Rank","Region","NodesFile","EdgesFile","NumberNodes","NumberEdges"]); return
-    node_list = list(node_list or [str(n) for n in G.nodes()]); node_to_idx = {str(n):i for i,n in enumerate(node_list)}
-    sv = _normalize_seed_vector(seed_vector, len(node_list)); sv = np.zeros(len(node_list)) if sv is None else sv
-    seed_idx = set(np.where(np.isfinite(sv) & (sv > 0))[0]); colors = _seed_color_map(sv)
+        _write_empty_tsv(report_dir / "network_summary.tsv", summary_cols)
+        return
+
+    node_list = [str(n) for n in (node_list or list(G.nodes()))]
+    node_to_idx = {str(n): i for i, n in enumerate(node_list)}
+    n_nodes = len(node_list)
+    su, sv, sw = _static_edge_arrays(G, node_list, node_to_idx)
+    inputs = report_inputs if isinstance(report_inputs, pd.DataFrame) else top
+
+    # All-input heat is used only to display focal heat when focal is itself an input seed.
+    heat_with_focal = _raw_seed_heat_from_report_inputs(
+        inputs, node_to_idx, n_nodes, excluded_focal_idxs=None, fallback_seed_vector=seed_vector
+    )
+
     for rank_idx, (_, row) in enumerate(top.head(top_network_n).iterrows(), start=1):
         region = row.get("input_region", "")
-
-        # A candidate can overlap multiple network nodes. Treat ALL mapped nodes as
-        # focal sources, matching the standalone focal-to-seed exporter.
-        focal_nodes = [n for n in _split_semicolon(row.get("overlapped_nodes", "")) if n in G]
-        if not focal_nodes:
-            focal = str(row.get("max_rwr_node", "") or "")
-            if focal in G:
-                focal_nodes = [focal]
-        focal_nodes = sorted(set(str(n) for n in focal_nodes))
-        focal_set = set(focal_nodes)
-        focal_seed_idx = {node_to_idx[n] for n in focal_nodes if n in node_to_idx and node_to_idx[n] in seed_idx}
-
-        selected=set(focal_nodes); path_edges=set(); reachable=set()
-        if focal_nodes:
-            try:
-                _, paths = nx.multi_source_dijkstra(
-                    G,
-                    sources=focal_nodes,
-                    weight=lambda u,v,d: 1.0/max(_edge_weight_from_attrs(d),1e-12),
-                )
-            except Exception:
-                paths = {}
-
-            # Seeds that are themselves focal mappings are displayed as focal/seed,
-            # but are not treated as non-focal recipient seeds.
-            reachable.update(focal_seed_idx)
-            for si in seed_idx:
-                if si in focal_seed_idx:
-                    continue
-                sid=node_list[si]
-                path=paths.get(sid)
-                if not path:
-                    continue
-                if len(path)-1 <= max_hops:
-                    reachable.add(si); selected.update(path)
-                    for a,b in zip(path[:-1],path[1:]): path_edges.add(tuple(sorted((str(a),str(b)))))
-        node_records=[]
-        for nid in sorted(selected):
-            attrs=dict(G.nodes[nid]) if nid in G else {}; idx=node_to_idx.get(str(nid)); is_seed=idx in reachable
-            gene_id=attrs.get("gene_id", ""); is_gene=(not _is_missing(gene_id)) or str(nid).upper().startswith("ENSG")
-            label=attrs.get("gene_name") or attrs.get("symbol") or str(nid)
-            node_records.append({"node_id":nid,"label":label,"gene_id":gene_id,"gene_name":attrs.get("gene_name",""),"role":"seed" if is_seed else "intermediate",
-                                 "initial_heat":float(sv[idx]) if is_seed and idx is not None else "","node_color":colors.get(idx,"#D9D9D9") if is_seed else "#D9D9D9",
-                                 "node_size":42 if is_seed else 26,"node_shape":"ellipse" if is_gene else "triangle"})
-        edge_records=[]
-        for a,b in sorted(path_edges):
-            attrs=_static_edge_attrs(G,a,b); edge_records.append({"source":a,"target":b,"weight":_edge_weight_from_attrs(attrs),"edge_type":_edge_type_from_attrs(attrs)})
-        prefix=f"region{rank_idx:03d}"; nf=network_dir/f"{prefix}_nodes.tsv"; ef=network_dir/f"{prefix}_edges.tsv"
-        pd.DataFrame(node_records,columns=NETWORK_NODE_COLUMNS).to_csv(nf,sep="\t",index=False); pd.DataFrame(edge_records,columns=STATIC_EDGE_COLUMNS).to_csv(ef,sep="\t",index=False)
-        rows_summary.append({"Rank":rank_idx,"Region":region,"NodesFile":f"network/{nf.name}","EdgesFile":f"network/{ef.name}","NumberNodes":len(node_records),"NumberEdges":len(edge_records)})
-    pd.DataFrame(rows_summary).to_csv(report_dir/"network_summary.tsv",sep="\t",index=False)
-
-
-def _export_dynamic_networks(report_dir, top, nodes, node_to_idx, u_idx, v_idx, base_weight, dyn_weight, modifier_by_edge,
-                             p_adjusted, top_network_n, max_neighbors_per_node, seed_vector=None, node_attributes=None, max_hops=2):
-    network_dir=_mkdir(report_dir/"network"); rows_summary=[]; n=len(nodes)
-    if top_network_n<=0:
-        _write_empty_tsv(report_dir/"network_summary.tsv",["Rank","Region","NodesFile","EdgesFile","NumberNodes","NumberEdges"]); return
-    sv=_normalize_seed_vector(seed_vector,n); sv=np.zeros(n) if sv is None else sv; seed_idx=set(np.where(np.isfinite(sv)&(sv>0))[0]); colors=_seed_color_map(sv)
-    adj={i:[] for i in range(n)}
-    for ei,(u,v) in enumerate(zip(u_idx,v_idx)):
-        u=int(u);v=int(v); w=float(dyn_weight[ei]); cost=1.0/max(w,1e-12); adj[u].append((v,ei,cost)); adj[v].append((u,ei,cost))
-    import heapq
-    for rank_idx,(_,row) in enumerate(top.head(top_network_n).iterrows(),start=1):
-        region=row.get("input_region","")
-
-        # A candidate can overlap multiple network nodes. Use all mapped nodes as
-        # simultaneous focal sources, matching the standalone exporter.
-        focal_idxs=sorted(set(node_to_idx[n] for n in _split_semicolon(row.get("overlapped_nodes","")) if n in node_to_idx))
+        focal_idxs = sorted({
+            int(node_to_idx[n])
+            for n in _split_semicolon(row.get("overlapped_nodes", ""))
+            if n in node_to_idx
+        })
         if not focal_idxs:
-            focal_id=str(row.get("max_rwr_node","") or "")
-            fi=node_to_idx.get(focal_id)
-            focal_idxs=[fi] if fi is not None else []
-        focal_set=set(focal_idxs)
-        focal_seed_idx=focal_set.intersection(seed_idx)
+            focal_id = str(row.get("max_rwr_node", "") or "")
+            if focal_id in node_to_idx:
+                focal_idxs = [int(node_to_idx[focal_id])]
+        focal_set = set(focal_idxs)
 
-        selected=set(focal_idxs); edge_ids=set(); reachable=set(focal_seed_idx)
-        if focal_idxs:
-            # Multi-source Dijkstra; then retain the selected strongest path to each
-            # non-focal seed only when that path contains <= max_hops edges.
-            dist={fi:0.0 for fi in focal_idxs}; prev={}; pq=[(0.0,fi) for fi in focal_idxs]
-            heapq.heapify(pq)
-            while pq:
-                d,u=heapq.heappop(pq)
-                if d!=dist.get(u): continue
-                for v,ei,c in adj.get(u,[]):
-                    nd=d+c
-                    if nd<dist.get(v,float("inf")):
-                        dist[v]=nd; prev[v]=(u,ei); heapq.heappush(pq,(nd,v))
-            for si in seed_idx:
-                if si in focal_seed_idx: continue
-                if si not in dist: continue
-                cur=si; rev=[]; ok=True; seen=set()
-                while cur not in focal_set:
-                    if cur in seen or cur not in prev: ok=False; break
-                    seen.add(cur)
-                    pu,ei=prev[cur]; rev.append((pu,cur,ei)); cur=pu
-                if ok and len(rev)<=max_hops:
-                    reachable.add(si); selected.add(si)
-                    for a,b,ei in rev: selected.update([a,b]); edge_ids.add(ei)
-        node_records=[]
-        for idx in sorted(selected):
-            nid=str(nodes[idx]); attrs=dict((node_attributes or {}).get(nid,{}) or {}); gene_id=attrs.get("gene_id",""); is_gene=(not _is_missing(gene_id)) or nid.upper().startswith("ENSG")
-            is_seed=idx in reachable; label=attrs.get("gene_name") or attrs.get("symbol") or nid
-            node_records.append({"node_id":nid,"label":label,"gene_id":gene_id,"gene_name":attrs.get("gene_name",""),"role":"seed" if is_seed else "intermediate",
-                                 "initial_heat":float(sv[idx]) if is_seed else "","node_color":colors.get(idx,"#D9D9D9") if is_seed else "#D9D9D9",
-                                 "node_size":42 if is_seed else 26,"node_shape":"ellipse" if is_gene else "triangle"})
-        edge_records=[]
-        for ei in sorted(edge_ids):
-            u=int(u_idx[ei]);v=int(v_idx[ei]); edge_records.append({"source":str(nodes[u]),"target":str(nodes[v]),"base_weight":float(base_weight[ei]),"dynamic_weight":float(dyn_weight[ei]),"modifier":float(modifier_by_edge[ei]) if np.isfinite(modifier_by_edge[ei]) else "","edge_type":"dynamic_network_edge"})
-        prefix=f"region{rank_idx:03d}"; nf=network_dir/f"{prefix}_nodes.tsv"; ef=network_dir/f"{prefix}_edges.tsv"
-        pd.DataFrame(node_records,columns=NETWORK_NODE_COLUMNS).to_csv(nf,sep="\t",index=False); pd.DataFrame(edge_records,columns=DYNAMIC_EDGE_COLUMNS).to_csv(ef,sep="\t",index=False)
-        rows_summary.append({"Rank":rank_idx,"Region":region,"NodesFile":f"network/{nf.name}","EdgesFile":f"network/{ef.name}","NumberNodes":len(node_records),"NumberEdges":len(edge_records)})
-    pd.DataFrame(rows_summary).to_csv(report_dir/"network_summary.tsv",sep="\t",index=False)
+        # Standalone behavior: exclude the entire input region from non-focal seed
+        # heat when any mapped node of that region overlaps a focal node.
+        seed_heat_raw = _raw_seed_heat_from_report_inputs(
+            inputs, node_to_idx, n_nodes, excluded_focal_idxs=focal_set,
+            fallback_seed_vector=seed_vector,
+        )
+        seed_idxs = [int(i) for i in np.flatnonzero(seed_heat_raw > 0) if int(i) not in focal_set]
+
+        paths = _extract_standalone_paths(
+            n_nodes=n_nodes, u_idx=su, v_idx=sv, edge_weight=sw,
+            focal_idxs=focal_idxs, seed_idxs=seed_idxs,
+            max_hops=max_hops, metric="inverse_weight",
+        ) if focal_idxs and seed_idxs else {}
+
+        reachable_seed_idxs = sorted(paths.keys())
+        path_node_set, path_pairs = _path_nodes_and_pairs(paths)
+        path_node_set.update(focal_idxs)
+        path_node_set.update(reachable_seed_idxs)
+        edge_records_raw = _edge_records_for_path_pairs(path_pairs, su, sv, sw)
+
+        displayed_seed_idxs = sorted(set(reachable_seed_idxs) | {
+            i for i in focal_idxs if heat_with_focal[i] > 0
+        })
+        color_map = _seed_color_from_raw_heat(displayed_seed_idxs, heat_with_focal)
+
+        # Store shortest selected path metadata for reachable seeds.
+        path_meta = {
+            int(si): (float(info["distance"]), len(info["path"]) - 1)
+            for si, info in paths.items()
+        }
+
+        node_records: List[Dict[str, Any]] = []
+        for idx in sorted(path_node_set):
+            nid = node_list[idx]
+            attrs = dict(G.nodes[nid]) if nid in G else dict((node_attributes or {}).get(nid, {}) or {})
+            gene_name = attrs.get("gene_name", "")
+            gene_id = attrs.get("gene_id", "")
+            # Match the validated standalone exporter: classify a node as a gene
+            # when gene_id is present, with ENSG node IDs as a fallback.
+            is_gene = (
+                not _is_missing(gene_id)
+                or str(nid).upper().startswith("ENSG")
+            )
+            label = gene_name if not _is_missing(gene_name) else nid
+            is_focal = idx in focal_set
+            is_seed = idx in paths
+            is_seed_visual = is_seed or (is_focal and heat_with_focal[idx] > 0)
+            role = "focal" if is_focal else ("seed" if is_seed else "intermediate")
+            heat = float(heat_with_focal[idx]) if is_seed_visual else ""
+            dist_val, hops_val = path_meta.get(idx, ("", ""))
+            node_records.append({
+                "node_id": nid,
+                "label": label,
+                "gene_id": gene_id,
+                "gene_name": gene_name,
+                "role": role,
+                "initial_heat": heat,
+                "node_color": color_map.get(idx, "#D9D9D9") if is_seed_visual else "#D9D9D9",
+                "node_size": 42 if (is_focal or is_seed) else 26,
+                "node_shape": "ellipse" if is_gene else "triangle",
+                "path_distance": dist_val,
+                "path_hops": hops_val,
+                "gwas_snps": attrs.get("gwas_snps", ""),
+                "gwas_disease_traits": attrs.get("gwas_disease_traits", ""),
+            })
+
+        edge_records: List[Dict[str, Any]] = []
+        for rec in edge_records_raw:
+            u_id, v_id = node_list[rec["u_idx"]], node_list[rec["v_idx"]]
+            attrs = _static_edge_attrs(G, u_id, v_id)
+            edge_records.append({
+                "source": u_id,
+                "target": v_id,
+                "weight": float(rec["weight"]),
+                "edge_type": _edge_type_from_attrs(attrs),
+            })
+
+        prefix = f"region{rank_idx:03d}"
+        nf = network_dir / f"{prefix}_nodes.tsv"
+        ef = network_dir / f"{prefix}_edges.tsv"
+        pd.DataFrame(node_records, columns=node_cols).to_csv(nf, sep="\t", index=False)
+        pd.DataFrame(edge_records, columns=edge_cols).to_csv(ef, sep="\t", index=False)
+        rows_summary.append({
+            "Rank": rank_idx,
+            "Region": region,
+            "NodesFile": f"network/{nf.name}",
+            "EdgesFile": f"network/{ef.name}",
+            "NumberNodes": len(node_records),
+            "NumberEdges": len(edge_records),
+        })
+
+    pd.DataFrame(rows_summary, columns=summary_cols).to_csv(report_dir / "network_summary.tsv", sep="\t", index=False)
+
+
+def _export_dynamic_networks(
+    report_dir, top, nodes, node_to_idx, u_idx, v_idx, base_weight, dyn_weight, modifier_by_edge,
+    p_adjusted, top_network_n, max_neighbors_per_node, seed_vector=None, node_attributes=None,
+    max_hops=2, report_inputs: Optional[pd.DataFrame] = None,
+):
+    """Export Mode2B focal-to-seed subnetworks using the same standalone logic."""
+    network_dir = _mkdir(report_dir / "network")
+    rows_summary: List[Dict[str, Any]] = []
+    summary_cols = ["Rank", "Region", "NodesFile", "EdgesFile", "NumberNodes", "NumberEdges"]
+    node_cols = ["node_id", "label", "gene_id", "gene_name", "role", "initial_heat", "node_color", "node_size", "node_shape", "path_distance", "path_hops", "gwas_snps", "gwas_disease_traits"]
+    edge_cols = ["source", "target", "base_weight", "dynamic_weight", "modifier", "edge_type"]
+    if top_network_n <= 0:
+        _write_empty_tsv(report_dir / "network_summary.tsv", summary_cols)
+        return
+
+    node_names = [str(n) for n in nodes]
+    node_to_idx_local = {str(n): int(i) for n, i in node_to_idx.items()}
+    n_nodes = len(node_names)
+    inputs = report_inputs if isinstance(report_inputs, pd.DataFrame) else top
+    heat_with_focal = _raw_seed_heat_from_report_inputs(
+        inputs, node_to_idx_local, n_nodes, excluded_focal_idxs=None, fallback_seed_vector=seed_vector
+    )
+
+    for rank_idx, (_, row) in enumerate(top.head(top_network_n).iterrows(), start=1):
+        region = row.get("input_region", "")
+        focal_idxs = sorted({
+            int(node_to_idx_local[n])
+            for n in _split_semicolon(row.get("overlapped_nodes", ""))
+            if n in node_to_idx_local
+        })
+        if not focal_idxs:
+            focal_id = str(row.get("max_rwr_node", "") or "")
+            if focal_id in node_to_idx_local:
+                focal_idxs = [int(node_to_idx_local[focal_id])]
+        focal_set = set(focal_idxs)
+
+        seed_heat_raw = _raw_seed_heat_from_report_inputs(
+            inputs, node_to_idx_local, n_nodes, excluded_focal_idxs=focal_set,
+            fallback_seed_vector=seed_vector,
+        )
+        seed_idxs = [int(i) for i in np.flatnonzero(seed_heat_raw > 0) if int(i) not in focal_set]
+
+        paths = _extract_standalone_paths(
+            n_nodes=n_nodes,
+            u_idx=np.asarray(u_idx, dtype=int),
+            v_idx=np.asarray(v_idx, dtype=int),
+            edge_weight=np.asarray(dyn_weight, dtype=float),
+            focal_idxs=focal_idxs,
+            seed_idxs=seed_idxs,
+            max_hops=max_hops,
+            metric="inverse_weight",
+        ) if focal_idxs and seed_idxs else {}
+
+        reachable_seed_idxs = sorted(paths.keys())
+        path_node_set, path_pairs = _path_nodes_and_pairs(paths)
+        path_node_set.update(focal_idxs)
+        path_node_set.update(reachable_seed_idxs)
+        edge_records_raw = _edge_records_for_path_pairs(
+            path_pairs,
+            np.asarray(u_idx, dtype=int), np.asarray(v_idx, dtype=int),
+            np.asarray(dyn_weight, dtype=float),
+            base_weight=np.asarray(base_weight, dtype=float),
+            modifier_by_edge=np.asarray(modifier_by_edge, dtype=float),
+        )
+
+        displayed_seed_idxs = sorted(set(reachable_seed_idxs) | {
+            i for i in focal_idxs if heat_with_focal[i] > 0
+        })
+        color_map = _seed_color_from_raw_heat(displayed_seed_idxs, heat_with_focal)
+        path_meta = {
+            int(si): (float(info["distance"]), len(info["path"]) - 1)
+            for si, info in paths.items()
+        }
+
+        node_records: List[Dict[str, Any]] = []
+        for idx in sorted(path_node_set):
+            nid = node_names[idx]
+            attrs = dict((node_attributes or {}).get(nid, {}) or {})
+            gene_name = attrs.get("gene_name", "")
+            gene_id = attrs.get("gene_id", "")
+            # Match the validated standalone exporter: gene_id first, ENSG ID fallback.
+            is_gene = (
+                not _is_missing(gene_id)
+                or str(nid).upper().startswith("ENSG")
+            )
+            label = gene_name if not _is_missing(gene_name) else nid
+            is_focal = idx in focal_set
+            is_seed = idx in paths
+            is_seed_visual = is_seed or (is_focal and heat_with_focal[idx] > 0)
+            role = "focal" if is_focal else ("seed" if is_seed else "intermediate")
+            heat = float(heat_with_focal[idx]) if is_seed_visual else ""
+            dist_val, hops_val = path_meta.get(idx, ("", ""))
+            node_records.append({
+                "node_id": nid,
+                "label": label,
+                "gene_id": gene_id,
+                "gene_name": gene_name,
+                "role": role,
+                "initial_heat": heat,
+                "node_color": color_map.get(idx, "#D9D9D9") if is_seed_visual else "#D9D9D9",
+                "node_size": 42 if (is_focal or is_seed) else 26,
+                "node_shape": "ellipse" if is_gene else "triangle",
+                "path_distance": dist_val,
+                "path_hops": hops_val,
+                "gwas_snps": attrs.get("gwas_snps", ""),
+                "gwas_disease_traits": attrs.get("gwas_disease_traits", ""),
+            })
+
+        edge_records: List[Dict[str, Any]] = []
+        for rec in edge_records_raw:
+            u_id, v_id = node_names[rec["u_idx"]], node_names[rec["v_idx"]]
+            edge_records.append({
+                "source": u_id,
+                "target": v_id,
+                "base_weight": float(rec["base_weight"]),
+                "dynamic_weight": float(rec["dynamic_weight"]),
+                "modifier": rec.get("modifier", ""),
+                "edge_type": "dynamic_network_edge",
+            })
+
+        prefix = f"region{rank_idx:03d}"
+        nf = network_dir / f"{prefix}_nodes.tsv"
+        ef = network_dir / f"{prefix}_edges.tsv"
+        pd.DataFrame(node_records, columns=node_cols).to_csv(nf, sep="\t", index=False)
+        pd.DataFrame(edge_records, columns=edge_cols).to_csv(ef, sep="\t", index=False)
+        rows_summary.append({
+            "Rank": rank_idx,
+            "Region": region,
+            "NodesFile": f"network/{nf.name}",
+            "EdgesFile": f"network/{ef.name}",
+            "NumberNodes": len(node_records),
+            "NumberEdges": len(edge_records),
+        })
+
+    pd.DataFrame(rows_summary, columns=summary_cols).to_csv(report_dir / "network_summary.tsv", sep="\t", index=False)
 
 
 # -----------------------------------------------------------------------------
@@ -729,7 +1073,7 @@ def _reconstruct_seed_vector_from_ranking(
 ) -> Optional[np.ndarray]:
     """Reconstruct the RWR restart vector when the caller does not pass it.
 
-    In input-score mode, each region's total score is divided equally
+    In Mode2A/2B input-score mode, each region's total score is divided equally
     among its unique overlapped nodes, shared-node contributions are summed, and
     the result is globally normalized.  ``combine_mode`` is retained solely for
     API compatibility and is not used for seed construction.
@@ -738,7 +1082,7 @@ def _reconstruct_seed_vector_from_ranking(
         ranking["input_score"], errors="coerce"
     ).notna().any()
 
-    if has_input_score:
+    if has_input_score and seed_mode != "seed_nodes":
         seed = np.zeros(n_nodes, dtype=float)
         for _, row in ranking.iterrows():
             score = _safe_float(row.get("input_score"), np.nan)
@@ -1385,8 +1729,11 @@ def generate_static_report_outputs(
     _write_algorithm_trace_static(report_path, top, score_col)
     _write_rank_change_static(report_path, ranking, score_col)
 
-    _export_static_networks(report_path, top, G, node_score_map, top_network_n, max_neighbors_per_node,
-                            seed_vector=seed_vec_local, node_list=node_list, node_attributes=node_attributes, max_hops=2)
+    _export_static_networks(
+        report_path, top, G, node_score_map, top_network_n, max_neighbors_per_node,
+        seed_vector=seed_vec_local, node_list=node_list, node_attributes=node_attributes,
+        max_hops=2, report_inputs=out_df,
+    )
     return str(report_path)
 
 
@@ -1536,5 +1883,6 @@ def generate_dynamic_report_outputs(
         seed_vector=seed_vec_local,
         node_attributes=node_attributes,
         max_hops=2,
+        report_inputs=out_df,
     )
     return str(report_path)
