@@ -829,7 +829,7 @@ def main() -> None:
         description="Python rewrite of annoEnhancer.pl",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("-m", dest="genome", default="hg19", help="define the genome: hg19, hg38, mm10, mm39. default: hg19")
+    parser.add_argument("-m", dest="genome", default="hg38", help="define the genome, currently only hg38 is supported. default: hg38")
     parser.add_argument("-t", dest="thread", type=int, help="define the number of thread")
     parser.add_argument("-maxt", dest="maxt", type=int, default=MAXTHREAD_DEFAULT, help="define the maximum number of thread, default: 8")
     parser.add_argument("-minl", dest="minl", type=int, default=MINLINECOUNT_DEFAULT, help="define the minimum number of input regions/lines")

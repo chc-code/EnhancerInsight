@@ -1,0 +1,179 @@
+```{r, results='asis'}
+rank_change_filtered <- tables$rank_change
+
+if (!is.null(rank_change_filtered) && "final_score" %in% names(rank_change_filtered)) {
+  rank_change_filtered <- rank_change_filtered %>%
+    filter(!is.na(final_score), final_score > 0)
+}
+
+show_rank_changes <- mode != "Mode1" &&
+  !is.null(rank_change_filtered) &&
+  nrow(rank_change_filtered) > 0
+
+if (show_rank_changes) {
+  cat("# Rank changes\n\n## Input Top20 and final Top20\n\n")
+}
+```
+
+```{r}
+if (show_rank_changes) {
+  # Recompute the union from the filtered complete rank-change table.
+  union_tbl <- rank_change_filtered %>%
+    filter(input_rank <= 20 | final_rank <= 20) %>%
+    mutate(
+      in_input_top20 = input_rank <= 20,
+      in_final_top20 = final_rank <= 20
+    )
+
+  union_show <- union_tbl %>%
+    select(any_of(c(
+      "input_region",
+      "input_score",
+      "input_rank",
+      "final_score",
+      "final_rank",
+      "rank_change",
+      "in_input_top20",
+      "in_final_top20"
+    ))) %>%
+    arrange(final_rank) %>%
+    fmt_df() %>%
+    pretty_names()
+
+  dt_tbl(
+    union_show,
+    caption = "Union of input-score Top20 and final-score Top20",
+    page_length = 25,
+    max_rows = 40
+  )
+}
+```
+
+```{r, results='asis'}
+if (show_rank_changes) {
+  make_rank_change_plot <- function(df, order_col, plot_title) {
+    df <- df %>%
+      arrange(.data[[order_col]], input_region) %>%
+      mutate(
+        row_id = rev(seq_len(n())),
+        display_gene = if_else(
+          is.na(display_gene) | trimws(as.character(display_gene)) == "",
+          "",
+          compact_semicolon_text(display_gene, max_items = 3)
+        )
+      )
+
+    max_rank <- max(c(df$input_rank, df$final_rank), na.rm = TRUE)
+    left_pad <- max(2, ceiling(max_rank * 0.06))
+    right_pad <- max(3, ceiling(max_rank * 0.12))
+    gene_x <- 1 - right_pad * 0.55
+
+    p <- ggplot(df) +
+      geom_segment(aes(
+        y = row_id,
+        yend = row_id,
+        x = input_rank,
+        xend = final_rank
+      )) +
+      geom_point(aes(x = input_rank, y = row_id), size = 2) +
+      geom_point(aes(x = final_rank, y = row_id), size = 2, shape = 17) +
+      geom_text(
+        aes(x = gene_x, y = row_id, label = display_gene),
+        hjust = 0,
+        size = 4.1,
+        na.rm = TRUE
+      ) +
+      scale_y_continuous(
+        breaks = df$row_id,
+        labels = df$input_region,
+        expand = expansion(add = c(0.5, 0.5))
+      ) +
+      scale_x_reverse(
+        limits = c(max_rank + left_pad, 1 - right_pad),
+        breaks = scales::pretty_breaks(n = 6)
+      ) +
+      annotate(
+        "text",
+        x = gene_x,
+        y = max(df$row_id) + 0.8,
+        label = "Gene",
+        hjust = 0,
+        fontface = "bold",
+        size = 4.2
+      ) +
+      labs(
+        title = plot_title,
+        subtitle = "Circle: input-score rank; triangle: final RWR rank",
+        x = "Rank, reversed so rank 1 is farther right",
+        y = NULL
+      ) +
+      coord_cartesian(clip = "off") +
+      theme_bw(base_size = 14) +
+      theme(
+        plot.margin = margin(8, 95, 8, 8),
+        axis.text.y = element_text(size = 11),
+        axis.text.x = element_text(size = 11),
+        axis.title.x = element_text(size = 12),
+        plot.subtitle = element_text(size = 11),
+        plot.title = element_text(size = 15, face = "bold")
+      )
+    p
+  }
+
+  input_top20 <- rank_change_filtered %>%
+    filter(input_rank <= 20) %>%
+    arrange(input_rank, final_rank)
+
+  final_top20 <- rank_change_filtered %>%
+    filter(final_rank <= 20) %>%
+    arrange(final_rank, input_rank)
+
+  p_input <- make_rank_change_plot(
+    input_top20,
+    order_col = "input_rank",
+    plot_title = "Input-score Top20"
+  )
+  p_final <- make_rank_change_plot(
+    final_top20,
+    order_col = "final_rank",
+    plot_title = "Final-score Top20"
+  )
+
+  fig_dir <- file.path(report_dir, "figures")
+  dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+  input_png <- file.path(fig_dir, "rank_change_input_top20.png")
+  final_png <- file.path(fig_dir, "rank_change_final_top20.png")
+  ggsave(input_png, p_input, width = 8.4, height = 7.2, dpi = 180, bg = "white")
+  ggsave(final_png, p_final, width = 8.4, height = 7.2, dpi = 180, bg = "white")
+
+  # Embed the PNG files directly from the actual ranking-output path:
+  # <ranking output>/report/figures/.  Using data URIs avoids Pandoc
+  # resolving the files relative to the Rmd working directory.
+  input_src <- knitr::image_uri(normalizePath(input_png, winslash = "/", mustWork = TRUE))
+  final_src <- knitr::image_uri(normalizePath(final_png, winslash = "/", mustWork = TRUE))
+
+  htmltools::div(
+    style = "display:flex; gap:18px; align-items:flex-start; width:100%;",
+    htmltools::div(
+      style = "flex:1; min-width:0;",
+      htmltools::tags$img(src = input_src, style = "width:100%; height:auto;")
+    ),
+    htmltools::div(
+      style = "flex:1; min-width:0;",
+      htmltools::tags$img(src = final_src, style = "width:100%; height:auto;")
+    )
+  )
+}
+```
+
+```{r}
+if (show_rank_changes) {
+  download_links(
+    c(
+      "rank_change.tsv",
+      "rank_change_top20_union.tsv"
+    ),
+    report_dir
+  )
+}
+```

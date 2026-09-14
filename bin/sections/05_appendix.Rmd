@@ -1,0 +1,16 @@
+# Appendix
+
+```{r}
+files <- tibble::tibble(
+  File=c("summary.tsv","ranking.tsv","top20.tsv","filtered_inputs.tsv","rank_change.tsv","rank_change_largest.tsv",
+         "rank_change_top20_union.tsv","seed_contributions.tsv","direct_heat_flow.tsv"),
+  Description=c("Run-level metrics.","Complete prioritized ranking.","Top-ranked candidates.",
+                "Input regions excluded because they did not overlap any network node.",
+                "Input-score rank versus final-score rank.","Top 20 largest absolute rank changes.",
+                "Union of input-score Top20 and final-score Top20.",
+                "Seed-level contribution decomposition for candidate-driving nodes.",
+                "Estimated direct heat outflow from candidate-driving nodes."))%>%
+  mutate(Available=file.exists(file.path(report_dir,File)),
+         Link=ifelse(Available,sprintf('<a href="%s">%s</a>',File,File),""))
+DT::datatable(files,escape=FALSE,rownames=FALSE,options=list(pageLength=20,scrollX=TRUE))
+```

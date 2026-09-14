@@ -8,7 +8,7 @@ output:
 params:
   outdir: NULL        # directory containing: <proj>.annotation.txt, <proj>.m_tf.txt, <proj>.m_SNP.txt, <proj>.m_eQTL.txt, <proj>.target.txt
   proj: NULL          # project prefix, e.g. "K562-CTCF"
-  genome: "hg19"      # "hg19" or "hg38"
+  genome: "hg38"      # currently only "hg38" is supported
   refdir: NULL        # directory containing summary tables: TFBS-summary-<genome>.txt, SNP-summary-<genome>.txt, eqtl-summary-<genome>.txt
   tissue_map_nascent: NULL    # optional (2-col): sample <tab> tissue
   tissue_map_sc: NULL    # optional (2-col): sample <tab> tissue

@@ -1,0 +1,27 @@
+# Prioritized candidates
+
+The table below summarizes the highest-priority candidate regions together with network-derived evidence supporting their prioritization.
+
+```{r}
+top <- get_top_candidates(tables)
+if(is.null(top)||nrow(top)==0){
+  cat("No ranking table was found.")
+}else{
+  cols <- c("rank","input_region",if(mode!="Mode1")"input_score"else NULL,score_col,
+            if(mode=="Mode2B")"celltype"else NULL,"display_gene")
+  show_tbl <- top%>%slice_head(n=20)%>%select(any_of(cols))%>%drop_all_na_cols()%>%fmt_df()%>%pretty_names()
+  dt_tbl(show_tbl,caption="Top 20 prioritized candidate regions",page_length=20,max_rows=20)
+}
+```
+
+```{r}
+if(!is.null(top)&&!is.null(score_col)&&all(c("input_region",score_col)%in%names(top))){
+  plot_df <- top%>%slice_head(n=20)%>%transmute(Region=factor(input_region,levels=rev(input_region)),Score=.data[[score_col]])
+  ggplot(plot_df,aes(x=Region,y=Score))+geom_col()+coord_flip()+
+    labs(title="Top 20 prioritized candidate regions",x=NULL,y="Final RWR score")+theme_bw(base_size=12)
+}
+```
+
+```{r}
+download_links(c("ranking.tsv","top20.tsv"),report_dir)
+```

@@ -1,0 +1,58 @@
+# Network interpretation
+
+This section shows focal-centered regulatory subnetworks for the top 3 candidates. Each network contains the focal node, seed nodes connected to it by a selected path of no more than two edges, and the intermediate nodes on those paths.
+
+```{r, results='asis'}
+top <- get_top_candidates(tables)
+seed_df <- tables$seed_contributions
+summary_file <- file.path(report_dir, "network_summary.tsv")
+net_summary <- if (file.exists(summary_file)) data.table::fread(summary_file, data.table = FALSE) else NULL
+
+if (is.null(top) || nrow(top) == 0) {
+  cat("No ranking table was found.")
+} else if (is.null(net_summary) || nrow(net_summary) == 0) {
+  cat("No focal-to-seed network files were found.")
+} else {
+  if ("max_rwr_node" %in% names(top)) {
+    top_network_candidates <- top %>%
+      filter(!is.na(max_rwr_node), max_rwr_node != "") %>%
+      distinct(max_rwr_node, .keep_all = TRUE) %>%
+      slice_head(n = 3)
+  } else {
+    top_network_candidates <- top %>% slice_head(n = 3)
+  }
+
+  for (i in seq_len(nrow(top_network_candidates))) {
+    region_i <- top_network_candidates$input_region[[i]]
+    cat(sprintf('\n\n<h2 id="candidate-%d">4.%d Candidate #%d: %s</h2>\n\n',
+                i, i, i, htmltools::htmlEscape(region_i)))
+    cat(sprintf('\n<h3 id="candidate-%d-network">4.%d.1 Focal-to-seed network</h3>\n\n', i, i))
+
+    ns <- net_summary %>% filter(Region == region_i) %>% slice_head(n = 1)
+    if (nrow(ns) == 0) {
+      cat("No network was available for this candidate.\n\n")
+      next
+    }
+    nodes_file <- file.path(report_dir, ns$NodesFile[[1]])
+    edges_file <- file.path(report_dir, ns$EdgesFile[[1]])
+    if (!file.exists(nodes_file) || !file.exists(edges_file)) {
+      cat("Network node/edge files were not found.\n\n")
+      next
+    }
+    nodes_i <- data.table::fread(nodes_file, data.table = FALSE)
+    edges_i <- data.table::fread(edges_file, data.table = FALSE)
+    seeds_i <- if (!is.null(seed_df)) seed_df %>% filter(region == region_i) else NULL
+
+    cat('<p class="network-display-note"><strong>Network display:</strong> seed nodes connected to the focal node by a selected path of no more than two edges are shown together with intermediate nodes on those paths. Seeds (including the focal node when it is a seed) are shown in blue, with color intensity scaled by initial heat; intermediate nodes are gray. Gene nodes are circles and enhancer/regulatory-region nodes are triangles. Hover over or select a node to view its available annotations.</p>\n')
+    cy_html <- cytoscape_network_html(
+      region = region_i,
+      nodes = nodes_i,
+      edges = edges_i,
+      seeds = seeds_i,
+      widget_id = paste0("cy_candidate_", i)
+    )
+    cat(htmltools::htmlPreserve(as.character(cy_html)))
+    cat("\n\n")
+  }
+}
+```

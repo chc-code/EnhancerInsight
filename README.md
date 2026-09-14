@@ -1,9 +1,12 @@
 # EnhancerInsight
 
-**EnhancerInsight** is a platform for high-resolution, context-aware annotation and prioritization of candidate enhancers.
-By integrating single-cell and multi-omics data, it reveals cell-type–specific regulatory activity and reconstructs enhancer-centered regulatory context, including TF programs, enhancer–gene links, and variant associations. A network-based prioritization framework enables ranking of candidate regions using traits, cell types, or custom scores, supporting biologically informed discovery in disease-relevant contexts.
+**EnhancerInsight** integrates multiresolution and multiomics evidence to characterize and prioritize candidate enhancers within a context-aware framework.
+The functional characterization module is to define the regulatory context and biological relevance of candidate enhancers, leveraging genomic location and support from existing enhancer databases to establish enhancer identity, bulk and single-cell enhancer activity to infer tissue and cell-type origins, and TF binding, enhancer–gene regulation, disease-associated variants, eQTLs, and downstream effects to elucidate their regulatory and functional roles.
+The prioritization module uses network propagation over context-independent or context-aware regulatory networks to rank candidate regulatory regions. Context-independent networks prioritize highly connected enhancers regardless of cellular context, whereas context-aware networks rewire regulatory connections based on cell-type specificity, thereby identifying enhancers with both strong regulatory connectivity and cell-type-specific relevance.
 
 EnhancerInsight is available both as a web server for easy access and a standalone toolkit for large-scale or customized analyses. The web server is available at **https://bioinfo.vanderbilt.edu/enhancerinsight/**.
+
+Currently, only **hg38** is supported.
 
 ---
 
@@ -13,11 +16,11 @@ EnhancerInsight is available both as a web server for easy access and a standalo
 - [Installation](#installation)
 - [Reference databases](#reference-databases)
 - [Usage](#usage)
-  - [Annotation](#1-annotation)
-  - [Prioritization — Mode 1: trait-guided](#2-prioritization--mode-1-trait-guided)
-  - [Prioritization — Mode 2A: input signal](#3-prioritization--mode-2a-input-signal)
-  - [Prioritization — Mode 2B: cell-type specific](#4-prioritization--mode-2b-cell-type-specific)
-  - [Generating the HTML report](#5-generating-the-html-report)
+  - [1. Characterization](#1-characterization)
+  - [2. Generating the characterization report](#2-generating-the-characterization-report)
+  - [3. Prioritization — context-independent](#3-prioritization--context-independent)
+  - [4. Prioritization — context-aware](#4-prioritization--context-aware)
+  - [5. Generating the prioritization report](#5-generating-the-prioritization-report)
 - [Output files](#output-files)
 - [Input format](#input-format)
 - [Citation](#citation)
@@ -82,8 +85,9 @@ This reads `pixi.toml` and installs all Python packages, R, and system tools
 **4. Verify the installation**
 
 ```bash
-pixi run python bin/annoEnhancer_bedtools.py --help
-pixi run python bin/random_walk_rank_regions_v4.py --help
+pixi run python bin/annoEnhancer.py --help
+pixi run python bin/random_walk_rank_regions_context_independent.py --help
+pixi run python bin/random_walk_rank_regions_context_aware.py --help
 pixi run Rscript -e "library(rmdformats); cat('R env OK\n')"
 ```
 
@@ -118,30 +122,31 @@ brew install bedtools
 
 ## Reference databases
 
-Reference databases are required for annotation and prioritization and must be
+Reference databases are required for characterization and prioritization and must be
 downloaded separately using the links below.
 
 | Name | Download |
 |---|---|
-| hg38 | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.hg38.tgz) |
-| hg19 | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.hg19.tgz)|
-| Pre-built RWR network  | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.network.tgz) |
+| Reference files (hg38) | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.hg38.tgz) |
+| Pre-built network files | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.network.tgz) |
 
 
 After downloading, extract to a directory (referred to as `<refdir>` below):
 
 ```bash
-tar -xzf enhancerinsight_ref_hg38.tar.gz -C /path/to/refdir/
+tar -xzf enhancer_insight.hg38.tgz -C /path/to/refdir/
+tar -xzf enhancer_insight.network.tgz -C /path/to/refdir/
 ```
 
-Pre-built RWR network files for prioritization:
+Pre-built network files for prioritization:
 
-| File | Description |
-|---|---|
-| `prebuilt_network_v2_with_gwas.gpickle` | Base network for Mode 1 and 2A |
-| `dbscATAC_edgeprep_compact.base_edges.npz` | Base edge matrix for Mode 2B |
-| `dbscATAC_edgeprep_compact.edge_override/<CellType>.npz` | Per-cell-type edge overrides |
-| `node_specificity_dbscATAC.nodes.tsv` | Node index for Mode 2B |
+| File | Used by | Description |
+|---|---|---|
+| `prebuilt_network_v2_with_gwas.gpickle` | both | Unified regulatory network |
+| `dbscATAC_edgeprep_compact.base_edges.npz` | context-aware | Base edge matrix |
+| `dbscATAC_edgeprep_compact.edge_override/<CellType>.npz` | context-aware | Per-cell-type edge weight overrides |
+| `node_specificity_dbscATAC.nodes.tsv` | context-aware | Node ID ↔ index mapping |
+| `base_graph_topology.node_topology.tsv.gz` | context-aware | Node topology (component size, coreness) |
 
 Place these files in the same `<refdir>` or a dedicated `bin/` directory and
 update the paths in the commands below accordingly.
@@ -153,10 +158,10 @@ update the paths in the commands below accordingly.
 For pixi users, prefix every command with `pixi run`. If you are using a manual
 installation, run the scripts with your system Python/Rscript directly.
 
-### 1. Annotation
+### 1. Characterization
 
 ```bash
-pixi run python bin/annoEnhancer_bedtools.py \
+pixi run python bin/annoEnhancer.py \
     -m hg38 \
     -in input.bed \
     -o MyProject \
@@ -167,19 +172,20 @@ pixi run python bin/annoEnhancer_bedtools.py \
 
 | Flag | Default | Required | Description |
 |---|---|---|---|
-| `-in` | — | **yes** | Input BED file (≥ 3 columns: chr, start, end) |
-| `-m` | `hg19` | no | Genome assembly: `hg19`, `hg38`, `mm10`, `mm39` |
+| `-in` | — | **yes** | Input BED file (≥ 3 columns: chr, start, end), hg38 coordinates |
+| `-m` | `hg38` | no | Genome assembly. Currently only `hg38` is supported |
 | `-o` | `annoEnhancer` | no | Output prefix (project name) |
 | `-w` | — | **yes** | Output/working directory |
 | `-cb` | — | no | Custom binding-sites BED (adds a `user_binding` Y/N column) |
 | `-pri` | `0` | no | Set to `1` to add a database-support priority score column |
 | `-t` | — | no | Number of threads (activated when input > 100,000 lines) |
 | `-maxt` | `8` | no | Maximum allowed threads |
+| `-minl` | — | no | Minimum number of input regions/lines |
 
 **Example with all options:**
 
 ```bash
-pixi run python bin/annoEnhancer_bedtools.py \
+pixi run python bin/annoEnhancer.py \
     -m hg38 \
     -in regions.bed \
     -o GM12878_H3K27ac \
@@ -191,14 +197,14 @@ pixi run python bin/annoEnhancer_bedtools.py \
 
 ---
 
-### 2. Generating annotation report
+### 2. Generating the characterization report
 
-After running annotation, generate the interactive HTML report using the
+After running characterization, generate the interactive HTML report using the
 provided R Markdown template:
 
 ```bash
-pixi run python render_annoEnhancer_report_updated.py \
-    --rmd    report-update.Rmd \
+pixi run python bin/render_annoEnhancer_report_updated.py \
+    --rmd    bin/report-update.Rmd \
     --outdir ./results/ \
     --proj   MyProject \
     --genome hg38 \
@@ -209,7 +215,7 @@ Alternatively, render directly from R:
 
 ```r
 rmarkdown::render(
-  "report-update.Rmd",
+  "bin/report-update.Rmd",
   params = list(
     outdir  = "./results/",
     proj    = "MyProject",
@@ -237,20 +243,22 @@ dependency. It includes:
 
 ---
 
-### 3. Prioritization — Mode 1: trait-guided
+### 3. Prioritization — context-independent
 
-Enhancers are prioritized based on their network proximity to trait-associated signals. A selected disease or trait defines seed nodes; these are propagated via RWR. No input score required.
+For each candidate, the user-provided importance score (e.g., GWAS −log₁₀(*p*-value)) is assigned as its initial seed score. When no importance scores are provided, all candidate nodes are assigned equal initial scores. Seed scores are then propagated through the unified regulatory network using the source-integrated interaction weights, allowing scores to diffuse across connected genes and regulatory elements.
 
 ```bash
-pixi run python bin/random_walk_rank_regions_v4.py \
-    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
-    --disease-trait "Atrial fibrillation" \
+pixi run python bin/random_walk_rank_regions_context_independent.py \
+    --network /path/to/prebuilt_network_v2_with_gwas.gpickle \
     --input-regions input.bed \
     --restart 0.5 \
     --tol 1e-7 \
     --max-iter 100 \
-    --combine-overlaps max \
-    --output ranked_output.tsv
+    --combine-overlaps mean \
+    --output output_context_independent \
+    --report-top-n 20 \
+    --report-top-network-n 3 \
+    --report-max-neighbors 25
 ```
 
 **All options:**
@@ -258,71 +266,66 @@ pixi run python bin/random_walk_rank_regions_v4.py \
 | Flag | Default | Required | Description |
 |---|---|---|---|
 | `--network` | — | **yes** | Pre-built network file (.gpickle) |
-| `--disease-trait` | — | **yes** | GWAS trait keyword to use as seed (must match trait name in network) |
-| `--input-regions` | — | **yes** | Input BED file |
-| `--restart` | `0.5` | no | RWR restart probability (0–1). Higher = stronger return to seed nodes |
-| `--tol` | `1e-7` | no | Convergence tolerance |
+| `--input-regions` | — | **yes** | Input regions, see [Input format](#input-format) |
+| `--output` | — | **yes** | Output directory (`ranking.tsv` and `report/` are written here) |
+| `--restart` | `0.5` | no | RWR restart probability (0–1). Higher = stronger return to the initial scores |
+| `--tol` | `1e-7` | no | L1 convergence tolerance |
 | `--max-iter` | `100` | no | Maximum RWR iterations |
-| `--combine-overlaps` | `max` | no | How to combine scores when a region overlaps multiple nodes: `max`, `mean`, `sum` |
-| `--output` | — | **yes** | Output TSV file path |
+| `--combine-overlaps` | `max` | no | How to combine scores when a region overlaps multiple nodes: `max`, `mean`, `union` |
+| `--local-support-eta` | `0.3` | no | Weight of local seed support in the final score |
+| `--local-support-max-hops` | `3` | no | Maximum hops used for local seed support |
+| `--local-support-hop-decay` | `0.5` | no | Multiplicative decay for each additional local-support hop |
+| `--annotate-top-n` | `0` | no | If > 0, add component-aware annotations for the top N ranked regions |
+| `--tiny-component-size` | `2` | no | Component size threshold for tiny components |
+| `--report-top-n` | `20` | no | Number of top regions exported for the report |
+| `--report-top-network-n` | `3` | no | Number of top regions for local network export |
+| `--report-max-neighbors` | `25` | no | Maximum neighbors per overlapped node in local network export |
 
 ---
 
-### 4. Prioritization — Mode 2A: input signal-guided
+### 4. Prioritization — context-aware
 
-Each input region's score (e.g., GWAS −log₁₀(p-value)) is used as initial node heat. Signal is diffused through the network for context-aware ranking.
+For each candidate, the user-provided importance score (e.g., GWAS −log₁₀(*p*-value)) is assigned as its initial seed score. When no importance scores are provided, all candidate nodes are assigned equal initial scores. Seed scores are then propagated through the corresponding cell-type-specific rewired network, in which interaction weights are adjusted according to the specificity scores of the connecting nodes.
 
-```bash
-pixi run python bin/random_walk_rank_regions_v4.py \
-    --network     /path/to/prebuilt_network_v2_with_gwas.gpickle \
-    --input-regions input_with_scores.bed \
-    --restart 0.3 \
-    --tol 1e-7 \
-    --max-iter 100 \
-    --combine-overlaps max \
-    --output ranked_output.tsv
-```
-
-The input BED should have a score in column 5 (no `--disease-trait` flag):
-
-```
-chr1    713441    714434    region_001    24.15
-chr2    208245102 208246500 region_002    29.00
-chr8    127742018 127744200 region_003    13.70
-```
-
-> **Note:** A restart probability of `0.3` (vs. `0.5` for Mode 1) is recommended
-> to allow broader diffusion from sparse input seed nodes.
-
----
-
-### 5. Prioritization — Mode 2B: cell-type specific
-
-A selected cell type is used to reweight the base network using scATAC-seq chromatin accessibility. Signal propagation identifies enhancers active in the chosen cellular context. Available cell types correspond to the `.npz` files in the
-`edge_override/` directory.
+Available cell types correspond to the `.npz` files in the `edge_override/` directory.
 
 ```bash
-pixi run python bin/random_walk_rank_regions_dynamic.py \
-    --base-edges   /path/to/dbscATAC_edgeprep_compact.base_edges.npz \
+pixi run python bin/random_walk_rank_regions_context_aware.py \
+    --network       /path/to/prebuilt_network_v2_with_gwas.gpickle \
+    --base-edges    /path/to/dbscATAC_edgeprep_compact.base_edges.npz \
     --edge-override /path/to/dbscATAC_edgeprep_compact.edge_override/Cardiomyocyte.npz \
-    --nodes-index  /path/to/node_specificity_dbscATAC.nodes.tsv \
+    --nodes-index   /path/to/node_specificity_dbscATAC.nodes.tsv \
+    --topology-file /path/to/base_graph_topology.node_topology.tsv.gz \
     --input-regions input.bed \
     --restart 0.5 \
     --combine-overlaps max \
-    --output ranked_cardiomyocyte.tsv
+    --output output_context_aware_Cardiomyocyte \
+    --report-top-n 20 \
+    --report-top-network-n 3 \
+    --report-max-neighbors 25
 ```
 
 **All options:**
 
-| Flag | Required | Description |
-|---|---|---|
-| `--base-edges` | **yes** | Base regulatory network edge matrix (.npz) |
-| `--edge-override` | **yes** | Cell-type-specific edge weight matrix (.npz) |
-| `--nodes-index` | **yes** | Node ID ↔ index mapping (.tsv) |
-| `--input-regions` | **yes** | Input BED file (score in col 5 used if present) |
-| `--restart` | no | RWR restart probability (default: `0.5`) |
-| `--combine-overlaps` | no | Score combination strategy (default: `max`) |
-| `--output` | **yes** | Output TSV file path |
+| Flag | Default | Required | Description |
+|---|---|---|---|
+| `--base-edges` | — | **yes** | Base regulatory network edge matrix (.npz) |
+| `--edge-override` | — | **yes** | Cell-type-specific edge weight matrix (.npz) |
+| `--nodes-index` | — | **yes** | Node ID ↔ index mapping (.tsv) |
+| `--topology-file` | — | **yes** | Node topology file (`node_id`, `component_size`[, `coreness`]) |
+| `--input-regions` | — | **yes** | Input regions, see [Input format](#input-format) |
+| `--output` | — | **yes** | Output directory (`ranking.tsv` and `report/` are written here) |
+| `--network` | — | no | Pre-built network file (.gpickle), as in the example above |
+| `--min-component-size` | `5` | no | Nodes in network components smaller than this are filtered out |
+| `--use-coreness-penalty` | `off` | no | Node-level coreness penalty after component filtering: `off`, `linear`, `sqrt` |
+| `--restart` | `0.5` | no | RWR restart probability (0–1) |
+| `--tol` | `1e-9` | no | Convergence tolerance |
+| `--max-iter` | `100` | no | Maximum RWR iterations |
+| `--combine-overlaps` | `max` | no | Score combination strategy: `max`, `mean`, `union` |
+| `--report-top-n` | `20` | no | Number of top regions exported for the report |
+| `--report-top-network-n` | `3` | no | Number of top regions for local network export |
+| `--report-max-neighbors` | `25` | no | Maximum neighbors per overlapped node in local network export |
+| `--verbose` | off | no | Print progress details |
 
 **List available cell types:**
 
@@ -332,9 +335,24 @@ ls /path/to/dbscATAC_edgeprep_compact.edge_override/*.npz | xargs -n1 basename |
 
 ---
 
+### 5. Generating the prioritization report
+
+Both prioritization scripts write report-ready files to `<output>/report/`.
+Render them into an HTML report with:
+
+```bash
+cd bin
+pixi run Rscript render_report.R /path/to/output_context_aware_Cardiomyocyte/report/ prioritization_report.html
+```
+
+The first argument is the report directory, the second the HTML file name.
+The HTML report is written into the report directory.
+
+---
+
 ## Output files
 
-### Annotation
+### Characterization
 
 | File | Description |
 |---|---|
@@ -347,7 +365,7 @@ ls /path/to/dbscATAC_edgeprep_compact.edge_override/*.npz | xargs -n1 basename |
 | `<prefix>.target.txt` | Target gene lists (5 rows: closest / 50 kb / FANTOM5 / validated / eQTL) |
 | `<prefix>_report.html` | Self-contained interactive HTML report |
 
-### Annotation output columns
+### Characterization output columns
 
 | Column | Description |
 |---|---|
@@ -372,37 +390,55 @@ ls /path/to/dbscATAC_edgeprep_compact.edge_override/*.npz | xargs -n1 basename |
 
 ### Prioritization
 
-| Column | Mode | Description |
-|---|---|---|
-| `input_region` | all | Region identifier (`chr:start-end`) |
-| `rwr_score` | all | RWR score after convergence [0–1] |
-| `input_score` | 2A | User-supplied score from BED column 5 |
-| `n_overlapped_nodes` | all | Number of network nodes overlapping the region |
-| `overlapped_nodes` | all | Semicolon-separated overlapping node coordinates |
-| `overlapped_node_scores` | 2B | Per-node RWR score |
-| `celltype` | 2B | Selected cell type |
-| `all_tiny_components` | 1/2A | `True` if all overlapping nodes are isolated (score unreliable) |
-| `has_other_scored_node_in_component` | 1/2A | Network context quality flag |
+| Path | Description |
+|---|---|
+| `<output>/ranking.tsv` | Ranked table, one row per input region, with the input score (if provided) and RWR scores |
+| `<output>/report/` | Report-ready files (top `--report-top-n` regions, local networks of the top `--report-top-network-n` regions) |
+| `<output>/report/<name>.html` | HTML report generated by `render_report.R` |
 
 ---
 
 ## Input format
 
-Standard **BED format** (tab-separated). Columns 1–3 are required; coordinates
-follow the 0-based, half-open convention used by UCSC and bedtools.
+### Characterization
+
+Standard **BED format** (tab-separated), hg38 coordinates. Columns 1–3 are required;
+coordinates follow the 0-based, half-open convention used by UCSC and bedtools.
 
 ```
-# Minimum (BED3)
 chr1    713441    714434
 chr8    127742018 127744200
-
-# With name and score (BED5) — score column used in Mode 2A
-chr1    713441    714434    region_001    24.15
-chr8    127742018 127744200 region_002    13.70
 ```
 
 > A region spanning bases 1000–2000 (1-based, inclusive) is written as
 > `999  2000` in BED (0-based, exclusive end).
+
+### Prioritization
+
+Regions or variants in hg38, whitespace-separated. The importance score is optional;
+when it is missing, all candidates start with equal scores. Extra columns are ignored,
+and lines starting with `#` are skipped.
+
+| Layout | Columns | Score column |
+|---|---|---|
+| Interval (BED) | `chr  start  end  [score]` | 4 |
+| Variant (SNP) | `chr  pos  [score]` | 3 |
+| Interval string | `chr:start-end  [score]` | 2 |
+| Variant string | `chr:pos  [score]` | 2 |
+
+The whole file is read as either interval or SNP layout: if any row has no valid
+integer end coordinate in column 3 (missing, non-integer, or smaller than column 2),
+the file is treated as SNP layout.
+
+```
+# Interval layout, score in column 4
+chr1    713441    714434    24.15
+chr8    127742018 127744200 13.70
+
+# SNP layout, score in column 3, extra gene column ignored
+chr2    71392981    9.52    ZNF638
+chr2    174648092   41.22   WIPF1
+```
 
 ---
 

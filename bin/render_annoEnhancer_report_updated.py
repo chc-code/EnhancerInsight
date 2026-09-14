@@ -8,7 +8,7 @@ Example:
     --rmd report.Rmd \
     --outdir ../test-result \
     --proj K562-CTCF \
-    --genome hg19 \
+    --genome hg38 \
     --out ../test-result/report.html
 
 Defaults:
@@ -194,9 +194,9 @@ def main() -> None:
     )
     ap.add_argument(
         "--genome",
-        default="hg19",
+        default="hg38",
         metavar="STR",
-        help="Genome build label (for example: hg19, hg38, mm10, mm39). Default: hg19.",
+        help="Genome build label. Currently only hg38 is supported. Default: hg38.",
     )
     ap.add_argument(
         "--refdir",
