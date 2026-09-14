@@ -553,6 +553,13 @@ def _seed_color_map(seed_vector: Sequence[float]) -> Dict[int, str]:
     return {int(i): _blend_hex("#C6DBEF", "#08519C", 0.15 + 0.85*float(s)) for i,s in zip(idx,scaled)}
 
 
+# explicit columns: a candidate without any path edge must still get a header row,
+# otherwise the R report cannot read the empty file
+NETWORK_NODE_COLUMNS = ["node_id", "label", "gene_id", "gene_name", "role", "initial_heat", "node_color", "node_size", "node_shape"]
+STATIC_EDGE_COLUMNS = ["source", "target", "weight", "edge_type"]
+DYNAMIC_EDGE_COLUMNS = ["source", "target", "base_weight", "dynamic_weight", "modifier", "edge_type"]
+
+
 def _export_static_networks(report_dir, top, G, node_score_map, top_network_n, max_neighbors_per_node,
                             seed_vector=None, node_list=None, node_attributes=None, max_hops=2):
     network_dir = _mkdir(report_dir / "network"); rows_summary = []
@@ -611,7 +618,7 @@ def _export_static_networks(report_dir, top, G, node_score_map, top_network_n, m
         for a,b in sorted(path_edges):
             attrs=_static_edge_attrs(G,a,b); edge_records.append({"source":a,"target":b,"weight":_edge_weight_from_attrs(attrs),"edge_type":_edge_type_from_attrs(attrs)})
         prefix=f"region{rank_idx:03d}"; nf=network_dir/f"{prefix}_nodes.tsv"; ef=network_dir/f"{prefix}_edges.tsv"
-        pd.DataFrame(node_records).to_csv(nf,sep="\t",index=False); pd.DataFrame(edge_records).to_csv(ef,sep="\t",index=False)
+        pd.DataFrame(node_records,columns=NETWORK_NODE_COLUMNS).to_csv(nf,sep="\t",index=False); pd.DataFrame(edge_records,columns=STATIC_EDGE_COLUMNS).to_csv(ef,sep="\t",index=False)
         rows_summary.append({"Rank":rank_idx,"Region":region,"NodesFile":f"network/{nf.name}","EdgesFile":f"network/{ef.name}","NumberNodes":len(node_records),"NumberEdges":len(edge_records)})
     pd.DataFrame(rows_summary).to_csv(report_dir/"network_summary.tsv",sep="\t",index=False)
 
@@ -674,7 +681,7 @@ def _export_dynamic_networks(report_dir, top, nodes, node_to_idx, u_idx, v_idx, 
         for ei in sorted(edge_ids):
             u=int(u_idx[ei]);v=int(v_idx[ei]); edge_records.append({"source":str(nodes[u]),"target":str(nodes[v]),"base_weight":float(base_weight[ei]),"dynamic_weight":float(dyn_weight[ei]),"modifier":float(modifier_by_edge[ei]) if np.isfinite(modifier_by_edge[ei]) else "","edge_type":"dynamic_network_edge"})
         prefix=f"region{rank_idx:03d}"; nf=network_dir/f"{prefix}_nodes.tsv"; ef=network_dir/f"{prefix}_edges.tsv"
-        pd.DataFrame(node_records).to_csv(nf,sep="\t",index=False); pd.DataFrame(edge_records).to_csv(ef,sep="\t",index=False)
+        pd.DataFrame(node_records,columns=NETWORK_NODE_COLUMNS).to_csv(nf,sep="\t",index=False); pd.DataFrame(edge_records,columns=DYNAMIC_EDGE_COLUMNS).to_csv(ef,sep="\t",index=False)
         rows_summary.append({"Rank":rank_idx,"Region":region,"NodesFile":f"network/{nf.name}","EdgesFile":f"network/{ef.name}","NumberNodes":len(node_records),"NumberEdges":len(edge_records)})
     pd.DataFrame(rows_summary).to_csv(report_dir/"network_summary.tsv",sep="\t",index=False)
 
