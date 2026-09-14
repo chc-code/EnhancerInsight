@@ -1,0 +1,155 @@
+---
+title: "EnhancerInsight prioritization report"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+params:
+  report_dir: "report"
+---
+
+<script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+
+<style>
+.cy-report-wrapper {
+  display: flex;
+  gap: 14px;
+  width: 100%;
+  min-height: 620px;
+  margin: 12px 0 24px 0;
+}
+.cy-report-network {
+  flex: 1 1 76%;
+  min-width: 0;
+  height: 620px;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  background: #ffffff;
+}
+.cy-report-side {
+  flex: 0 0 24%;
+  min-width: 230px;
+  max-height: 620px;
+  overflow-y: auto;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fafafa;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.cy-report-toolbar {
+  margin: 6px 0 8px 0;
+}
+.cy-report-toolbar button {
+  margin-right: 6px;
+  padding: 4px 10px;
+}
+.cy-report-legend {
+  font-size: 0.92em;
+  margin: 4px 0 8px 0;
+}
+.cy-dot {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1px solid #333;
+  border-radius: 50%;
+  margin: 0 4px 0 10px;
+  vertical-align: middle;
+}
+.cy-dot:first-child {
+  margin-left: 0;
+}
+.cy-focal { background: #e53935; }
+.cy-seed { background: #1e88e5; }
+.cy-recipient { background: #cfd3d7; }
+
+@media (max-width: 900px) {
+  .cy-report-wrapper {
+    display: block;
+  }
+  .cy-report-network {
+    width: 100%;
+    height: 540px;
+  }
+  .cy-report-side {
+    width: auto;
+    max-height: none;
+    margin-top: 10px;
+  }
+}
+
+.cy-line {display:inline-block;width:34px;height:0;margin:0 5px 2px 10px;vertical-align:middle;}
+.cy-line-direct-seed {border-top:3px solid #1e88e5;}
+.cy-line-indirect-seed {border-top:3px dashed #1e88e5;}
+.cy-line-recipient {border-top:3px solid #7a7a7a;}
+
+.gwas-more {
+  display: inline-block;
+  margin-top: 4px;
+  font-weight: 600;
+  color: #555555;
+}
+
+</style>
+
+
+<style>
+table td,
+table th {
+  vertical-align: top !important;
+}
+
+/* By default, keep node names, regions, ranks, and numeric values on one line. */
+table td {
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
+/* Only long GWAS annotation columns are allowed to wrap. */
+table td.gwas-wrap,
+table th.gwas-wrap {
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  vertical-align: top !important;
+}
+
+/* Keep the first column readable and prevent chromosome coordinates from
+   breaking in the middle. */
+table td:first-child,
+table th:first-child {
+  white-space: nowrap !important;
+  min-width: 120px;
+}
+</style>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE,message=FALSE,warning=FALSE,fig.width=9,fig.height=5.5,dpi=150)
+source("R/io.R")
+source("R/utils.R")
+source("R/network_utils.R")
+report_dir <- resolve_report_dir(params$report_dir)
+tables <- load_tables(report_dir)
+mode <- detect_mode(tables)
+score_col <- final_score_col(mode, tables$ranking)
+```
+
+```{r child-overview, child='sections/01_overview.Rmd'}
+```
+
+```{r child-prioritized, child='sections/02_prioritized_candidates.Rmd'}
+```
+
+```{r child-rank-change, child='sections/03_rank_changes.Rmd'}
+```
+
+```{r child-network, child='sections/04_network_interpretation.Rmd'}
+```
+
+```{r child-appendix, child='sections/05_appendix.Rmd'}
+```

@@ -4,7 +4,7 @@
 The functional characterization module is to define the regulatory context and biological relevance of candidate enhancers, leveraging genomic location and support from existing enhancer databases to establish enhancer identity, bulk and single-cell enhancer activity to infer tissue and cell-type origins, and TF binding, enhancer–gene regulation, disease-associated variants, eQTLs, and downstream effects to elucidate their regulatory and functional roles.
 The prioritization module uses network propagation over context-independent or context-aware regulatory networks to rank candidate regulatory regions. Context-independent networks prioritize highly connected enhancers regardless of cellular context, whereas context-aware networks rewire regulatory connections based on cell-type specificity, thereby identifying enhancers with both strong regulatory connectivity and cell-type-specific relevance.
 
-EnhancerInsight is available both as a web server for easy access and a standalone toolkit for large-scale or customized analyses. The web server is available at **https://bioinfo.vanderbilt.edu/enhancerinsight/**.
+EnhancerInsight is available both as a web server for easy access and a standalone toolkit for large-scale or customized analyses. The web server is available at **https://cqsweb.app.vumc.org/enhancerinsight/**.
 
 Currently, only **hg38** is supported.
 
@@ -127,8 +127,8 @@ downloaded separately using the links below.
 
 | Name | Download |
 |---|---|
-| Reference files (hg38) | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.hg38.tgz) |
-| Pre-built network files | [download](https://www.6157777.xyz/enhancerinsight/download/enhancer_insight.network.tgz) |
+| Reference files (hg38) | [download](https://cqsweb.app.vumc.org/enhancerinsight/download/enhancer_insight.hg38.tgz) |
+| Pre-built network files | [download](https://cqsweb.app.vumc.org/enhancerinsight/download/enhancer_insight.network.tgz) |
 
 
 After downloading, extract to a directory (referred to as `<refdir>` below):

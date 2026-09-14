@@ -4,12 +4,12 @@
 top <- get_top_candidates(tables)
 filtered_n <- if (is.null(tables$filtered_inputs)) 0 else nrow(tables$filtered_inputs)
 overview <- tibble::tibble(
-  Item=c("Analysis mode","Method summary","Input regions","Filtered inputs (no network overlap)","Top candidates shown",if(mode=="Mode2B")"Cell type"else NULL),
+  Item=c("Analysis mode","Method summary","Input regions","Filtered inputs (no network overlap)","Top candidates shown",if(mode=="aware")"Cell type"else NULL),
   Value=c(mode_label(mode),method_summary(mode),
           ifelse(is.null(tables$ranking),NA,nrow(tables$ranking) + filtered_n),
           filtered_n,
           ifelse(is.null(top),NA,min(20,nrow(top))),
-          if(mode=="Mode2B"&&!is.null(top)&&"celltype"%in%names(top))unique(top$celltype)[1]else NULL))
+          if(mode=="aware"&&!is.null(top)&&"celltype"%in%names(top))unique(top$celltype)[1]else NULL))
 kable(overview,caption="Run overview")%>%kable_styling(full_width=FALSE)
 ```
 

@@ -722,7 +722,7 @@ def _reconstruct_seed_vector_from_ranking(
 ) -> Optional[np.ndarray]:
     """Reconstruct the RWR restart vector when the caller does not pass it.
 
-    In Mode2A/2B input-score mode, each region's total score is divided equally
+    In input-score mode, each region's total score is divided equally
     among its unique overlapped nodes, shared-node contributions are summed, and
     the result is globally normalized.  ``combine_mode`` is retained solely for
     API compatibility and is not used for seed construction.
@@ -731,7 +731,7 @@ def _reconstruct_seed_vector_from_ranking(
         ranking["input_score"], errors="coerce"
     ).notna().any()
 
-    if has_input_score and seed_mode != "seed_nodes":
+    if has_input_score:
         seed = np.zeros(n_nodes, dtype=float)
         for _, row in ranking.iterrows():
             score = _safe_float(row.get("input_score"), np.nan)

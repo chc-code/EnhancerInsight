@@ -36,12 +36,12 @@ download_links <- function(files,report_dir) {
       if(i>1) htmltools::HTML(" &nbsp;|&nbsp; "),htmltools::tags$a(href=files[[i]],files[[i]])))))
 }
 method_summary <- function(mode) {
-  if (mode=="Mode1") return("Random Walk with Restart (RWR) on the pre-built biological network using input regions as binary seeds.")
-  if (mode=="Mode2A") return("Heat-weighted RWR on the pre-built biological network using user-provided input scores as seed heat.")
-  if (mode=="Mode2B") return("Heat-weighted RWR on a dynamically reweighted cell type-specific network. Dynamic edge weight equals base edge weight multiplied by a specificity modifier.")
+  if (mode=="independent_equal") return("Context-independent prioritization: Random Walk with Restart (RWR) on the pre-built network, with all input regions as equal-weight seeds.")
+  if (mode=="independent_scores") return("Context-independent prioritization: heat-weighted RWR on the pre-built network, using user-provided input scores as seed heat.")
+  if (mode=="aware") return("Context-aware prioritization: RWR on a cell type-specific rewired network. Dynamic edge weight equals base edge weight multiplied by a specificity modifier.")
   "Prioritization workflow."
 }
-mode_label <- function(mode) dplyr::case_when(mode=="Mode1"~"Mode 1",mode=="Mode2A"~"Mode 2A",mode=="Mode2B"~"Mode 2B",TRUE~mode)
+mode_label <- function(mode) dplyr::case_when(mode=="independent_equal"~"Context-independent (equal input weights)",mode=="independent_scores"~"Context-independent (input scores)",mode=="aware"~"Context-aware",TRUE~mode)
 
 
 compact_semicolon_text <- function(x, max_items = 8, empty = "") {

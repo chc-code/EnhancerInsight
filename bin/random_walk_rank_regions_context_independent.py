@@ -57,61 +57,6 @@ def build_nodes_interval_df(G):
 
 
 # -----------------------------
-# Seed selection for Mode 1
-# -----------------------------
-
-def select_seeds(G, disease_trait=None, seeds_file=None):
-    """
-    Return set of seed node IDs based on disease_trait and/or seeds_file.
-    """
-    seeds = set()
-
-    # Trait-based seeds from GWAS annotations
-    if disease_trait:
-        pat = disease_trait.lower()
-        for n, attrs in G.nodes(data=True):
-            traits = attrs.get("gwas_disease_traits")
-            if not traits:
-                continue
-            if pat in str(traits).lower():
-                seeds.add(n)
-
-    # Explicit seeds from file
-    if seeds_file:
-        with open(seeds_file) as f:
-            for line in f:
-                nid = line.strip()
-                if not nid:
-                    continue
-                if nid in G:
-                    seeds.add(nid)
-
-    return seeds
-
-
-def build_seed_vector(node_list, node_to_idx, seeds):
-    """
-    Build seed vector s over nodes:
-      - if seeds present: uniform over seeds
-      - else: uniform over all nodes
-    """
-    n = len(node_list)
-    s = np.zeros(n, dtype=float)
-    if seeds:
-        valid = [node_to_idx[n] for n in seeds if n in node_to_idx]
-        if valid:
-            for idx in valid:
-                s[idx] = 1.0
-            s /= s.sum()
-            return s
-        else:
-            print("WARNING: no seeds matched node IDs, falling back to uniform.")
-    # fallback: uniform
-    s[:] = 1.0 / n
-    return s
-
-
-# -----------------------------
 # Transition matrix & RWR
 # -----------------------------
 
@@ -433,13 +378,13 @@ def map_regions_to_nodes(G, p, node_to_idx, input_regions_df, combine_mode="max"
 
 
 # -----------------------------
-# Build node heat from region scores (Mode 2)
+# Build node heat from input regions
 # -----------------------------
 
 def build_node_heat_from_region_scores(G, node_list, node_to_idx,
                                        input_regions_df, combine_mode="max",
-                                       return_scored_nodes=False):
-    """Build the Mode 2 RWR restart vector from region-level input scores.
+                                       return_scored_nodes=False, equal_heat=False):
+    """Build the RWR restart vector from region-level input scores.
 
     Each input region contributes a fixed total amount of heat equal to its
     ``input_score``.  If a region overlaps multiple network nodes, that heat is
@@ -451,10 +396,13 @@ def build_node_heat_from_region_scores(G, node_list, node_to_idx,
     used during seed construction; ``--combine-overlaps`` applies only when
     stationary node scores are aggregated back to a region-level final score.
 
+    If ``equal_heat=True`` (input without scores), every node overlapped by an
+    input region gets the same initial heat.
+
     If ``return_scored_nodes=True``, also return the set of nodes receiving
     positive initial heat before normalization.
     """
-    if "input_score" not in input_regions_df.columns:
+    if "input_score" not in input_regions_df.columns and not equal_heat:
         print("No input_score column found; cannot build node heat.")
         return (None, set()) if return_scored_nodes else None
 
@@ -490,6 +438,13 @@ def build_node_heat_from_region_scores(G, node_list, node_to_idx,
     heat = np.zeros(len(node_list), dtype=float)
     scored_nodes = set()
     for region, nodes in region_to_nodes.items():
+        if equal_heat:
+            for node in nodes:
+                idx = node_to_idx.get(node)
+                if idx is not None:
+                    heat[idx] = 1.0
+                    scored_nodes.add(node)
+            continue
         score = score_by_region.get(region)
         if score is None or not np.isfinite(score) or len(nodes) == 0:
             continue
@@ -691,10 +646,8 @@ def annotate_top_n_results(out_df, G, top_n, reference_nodes,
 def parse_args():
     p = argparse.ArgumentParser(
         description=(
-            "Random walk with restart on pre-built network to rank regions.\n"
-            "Mode 1: if --disease-trait or --seeds-file is provided, treat as trait/seed-based RWR.\n"
-            "Mode 2: if no seeds provided and input-regions has scores in 2nd/4th column, "
-            "treat scores as heat and diffuse them (HotNet2-like)."
+            "Context-independent prioritization: random walk with restart on the pre-built network to rank regions.\n"
+            "Input scores are used as initial node heat; without scores, all overlapped nodes start with equal heat."
         )
     )
     p.add_argument("--network", required=True,
@@ -703,11 +656,9 @@ def parse_args():
                    help="Input regions file. Supported formats:\n"
                         "  1) chr:start-end [score]\n"
                         "  2) chr start end [score]\n"
+                        "  3) chr:pos [score]\n"
+                        "  4) chr pos [score]  (SNPs)\n"
                         "Extra columns are ignored.")
-    p.add_argument("--disease-trait", default=None,
-                   help="Substring to match in gwas_disease_traits for seed selection (Mode 1).")
-    p.add_argument("--seeds-file", default=None,
-                   help="File with one node ID per line as seeds (Mode 1).")
     p.add_argument("--restart", type=float, default=0.5,
                    help="Restart probability for RWR. Default=0.5")
     p.add_argument("--tol", type=float, default=1e-7,
@@ -765,193 +716,89 @@ def main():
     all_regions, input_regions_df, has_scores = load_input_regions(args.input_regions)
     print(f"  Loaded {len(all_regions)} regions; has_scores={has_scores}")
 
-    # Decide mode
-    has_seed_info = bool(args.disease_trait) or bool(args.seeds_file)
-
-    if has_seed_info:
-        mode = "trait"
-    elif has_scores:
-        mode = "heat"
-    else:
-        mode = "trait_fallback"
-
+    mode = "input_scores" if has_scores else "input_regions_binary"
     print(f"\nOperating mode: {mode}")
 
-    reference_nodes = set()
-    reference_label = "reference"
-    seed_vector_for_report = None
+    print("Building node heat from input regions ...")
+    s_heat, scored_nodes = build_node_heat_from_region_scores(
+        G, node_list, node_to_idx,
+        input_regions_df,
+        return_scored_nodes=True,
+        equal_heat=not has_scores,
+    )
+    if s_heat is None:
+        print("ERROR: could not build node heat from input regions (no overlap with network nodes, or no positive scores).")
+        sys.exit(1)
 
-    # -------------------
-    # Mode 1: trait/seed-based RWR
-    # -------------------
-    if mode in ["trait", "trait_fallback"]:
-        seeds = select_seeds(G, disease_trait=args.disease_trait,
-                             seeds_file=args.seeds_file)
-        reference_nodes = set(seeds)
-        reference_label = "seed"
+    seed_vector_for_report = s_heat.copy()
+    reference_nodes = set(scored_nodes)
+    reference_label = "scored" if has_scores else "input"
 
-        print(f"Trait/seeds: {len(seeds)}")
-        if len(seeds) == 0:
-            print("No seeds found; using uniform over all nodes (global centrality).")
+    print(f"Initial nodes with heat: {len(reference_nodes)}")
 
-        s = build_seed_vector(node_list, node_to_idx, seeds)
-        seed_vector_for_report = s.copy()
+    print(f"Running RWR from heat (restart={args.restart}) ...")
+    p = random_walk_with_restart(P, s_heat,
+                                 restart=args.restart,
+                                 tol=args.tol,
+                                 max_iter=args.max_iter)
+    p_norm = normalize_vec(p)
 
-        print(f"Running RWR (restart={args.restart}) ...")
-        p = random_walk_with_restart(P, s,
-                                     restart=args.restart,
-                                     tol=args.tol,
-                                     max_iter=args.max_iter)
-        p_norm = normalize_vec(p)
+    # Local heat support uses the raw weighted adjacency (no degree
+    # normalization), so multiple nearby high-heat inputs can directly rescue a
+    # candidate.
+    print(
+        f"Computing local heat support (max_hops={args.local_support_max_hops}, "
+        f"decay={args.local_support_hop_decay}, eta={args.local_support_eta}) ..."
+    )
+    local_support_node = compute_local_seed_support(
+        A_weighted, s_heat,
+        max_hops=args.local_support_max_hops,
+        hop_decay=args.local_support_hop_decay,
+    )
+    final_node_score = combine_rwr_and_local_support(
+        p_norm, local_support_node, eta=args.local_support_eta
+    )
 
-        # Mode 1 local seed support: all explicit seed nodes have equal initial
-        # strength through the already-normalized seed vector s.  If Mode 1
-        # falls back to uniform-over-all-nodes because no seeds were supplied,
-        # local support is disabled because there is no meaningful seed list.
-        if seeds:
-            print(
-                f"Computing local seed support (max_hops={args.local_support_max_hops}, "
-                f"decay={args.local_support_hop_decay}, eta={args.local_support_eta}) ..."
-            )
-            local_support_node = compute_local_seed_support(
-                A_weighted, s,
-                max_hops=args.local_support_max_hops,
-                hop_decay=args.local_support_hop_decay,
-            )
-            final_node_score = combine_rwr_and_local_support(
-                p_norm, local_support_node, eta=args.local_support_eta
-            )
-        else:
-            local_support_node = np.zeros(len(node_list), dtype=float)
-            final_node_score = p_norm.copy()
+    print(f"Mapping node scores back to regions (combine={args.combine_overlaps}) ...")
+    region_scores_rwr = map_regions_to_nodes(
+        G, p_norm, node_to_idx, input_regions_df,
+        combine_mode=args.combine_overlaps
+    )
+    region_scores_local = map_regions_to_nodes(
+        G, local_support_node, node_to_idx, input_regions_df,
+        combine_mode=args.combine_overlaps
+    )
+    region_scores = map_regions_to_nodes(
+        G, final_node_score, node_to_idx, input_regions_df,
+        combine_mode=args.combine_overlaps
+    )
 
-        print(f"Mapping node scores back to regions (combine={args.combine_overlaps}) ...")
-        region_scores_rwr = map_regions_to_nodes(
-            G, p_norm, node_to_idx, input_regions_df,
-            combine_mode=args.combine_overlaps
-        )
-        region_scores_local = map_regions_to_nodes(
-            G, local_support_node, node_to_idx, input_regions_df,
-            combine_mode=args.combine_overlaps
-        )
-        region_scores_final = map_regions_to_nodes(
-            G, final_node_score, node_to_idx, input_regions_df,
-            combine_mode=args.combine_overlaps
-        )
-        region_scores = region_scores_final
+    rows = []
+    for region in sorted(region_scores.keys()):
+        info = region_scores[region]
+        raw_score = ""
+        subset = input_regions_df[input_regions_df["input_region"] == region]
+        if not subset.empty and "input_score" in subset.columns:
+            raw_score = subset["input_score"].iloc[0]
+        rows.append({
+            "input_region": region,
+            "rwr_score_base": region_scores_rwr[region]["score"],
+            "local_support_score": region_scores_local[region]["score"],
+            "rwr_score": info["score"],
+            "final_score": info["score"],
+            "input_score": raw_score,
+            "n_overlapped_nodes": info["n_nodes"],
+            "overlapped_nodes": ";".join(info["nodes"]) if info["nodes"] else "",
+        })
 
-        rows = []
-        for region in sorted(region_scores.keys()):
-            info = region_scores[region]
-            raw_score = ""
-            if "input_score" in input_regions_df.columns:
-                subset = input_regions_df[input_regions_df["input_region"] == region]
-                if not subset.empty:
-                    raw_score = subset["input_score"].iloc[0]
-            rows.append({
-                "input_region": region,
-                "rwr_score_base": region_scores_rwr[region]["score"],
-                "local_support_score": region_scores_local[region]["score"],
-                "rwr_score": info["score"],
-                "final_score": info["score"],
-                "input_score": raw_score,
-                "n_overlapped_nodes": info["n_nodes"],
-                "overlapped_nodes": ";".join(info["nodes"]) if info["nodes"] else "",
-            })
-
-        out_df = pd.DataFrame(rows)
-        out_df = out_df[pd.to_numeric(out_df["n_overlapped_nodes"], errors="coerce").fillna(0) > 0].copy()
-        out_df["_input_score_sort"] = pd.to_numeric(out_df.get("input_score"), errors="coerce").fillna(-np.inf)
-        out_df = out_df.sort_values(
-            ["rwr_score", "_input_score_sort"],
-            ascending=[False, False],
-            kind="mergesort",
-        ).drop(columns="_input_score_sort").reset_index(drop=True)
-
-    # -------------------
-    # Mode 2: heat-based (HotNet2-like)
-    # -------------------
-    else:
-        print("Building node heat from region scores ...")
-        s_heat, scored_nodes = build_node_heat_from_region_scores(
-            G, node_list, node_to_idx,
-            input_regions_df,
-            return_scored_nodes=True
-        )
-        if s_heat is None:
-            print("ERROR: could not build node heat from region scores and no seeds provided.")
-            sys.exit(1)
-
-        seed_vector_for_report = s_heat.copy()
-        reference_nodes = set(scored_nodes)
-        reference_label = "scored"
-
-        print(f"Initial scored nodes in heat mode: {len(reference_nodes)}")
-
-        print(f"Running RWR from heat (restart={args.restart}) ...")
-        p = random_walk_with_restart(P, s_heat,
-                                     restart=args.restart,
-                                     tol=args.tol,
-                                     max_iter=args.max_iter)
-        p_norm = normalize_vec(p)
-
-        # Mode 2A local heat support: seed strength is the normalized mlogp-based
-        # heat vector.  Raw weighted adjacency is used (no degree normalization),
-        # so multiple nearby high-heat inputs can directly rescue a candidate.
-        print(
-            f"Computing local heat support (max_hops={args.local_support_max_hops}, "
-            f"decay={args.local_support_hop_decay}, eta={args.local_support_eta}) ..."
-        )
-        local_support_node = compute_local_seed_support(
-            A_weighted, s_heat,
-            max_hops=args.local_support_max_hops,
-            hop_decay=args.local_support_hop_decay,
-        )
-        final_node_score = combine_rwr_and_local_support(
-            p_norm, local_support_node, eta=args.local_support_eta
-        )
-
-        print(f"Mapping node scores back to regions (combine={args.combine_overlaps}) ...")
-        region_scores_rwr = map_regions_to_nodes(
-            G, p_norm, node_to_idx, input_regions_df,
-            combine_mode=args.combine_overlaps
-        )
-        region_scores_local = map_regions_to_nodes(
-            G, local_support_node, node_to_idx, input_regions_df,
-            combine_mode=args.combine_overlaps
-        )
-        region_scores_final = map_regions_to_nodes(
-            G, final_node_score, node_to_idx, input_regions_df,
-            combine_mode=args.combine_overlaps
-        )
-        region_scores = region_scores_final
-
-        rows = []
-        for region in sorted(region_scores.keys()):
-            info = region_scores[region]
-            raw_score = ""
-            subset = input_regions_df[input_regions_df["input_region"] == region]
-            if not subset.empty and "input_score" in subset.columns:
-                raw_score = subset["input_score"].iloc[0]
-            rows.append({
-                "input_region": region,
-                "rwr_score_base": region_scores_rwr[region]["score"],
-                "local_support_score": region_scores_local[region]["score"],
-                "rwr_score": info["score"],
-                "final_score": info["score"],
-                "input_score": raw_score,
-                "n_overlapped_nodes": info["n_nodes"],
-                "overlapped_nodes": ";".join(info["nodes"]) if info["nodes"] else "",
-            })
-
-        out_df = pd.DataFrame(rows)
-        out_df = out_df[pd.to_numeric(out_df["n_overlapped_nodes"], errors="coerce").fillna(0) > 0].copy()
-        out_df["_input_score_sort"] = pd.to_numeric(out_df.get("input_score"), errors="coerce").fillna(-np.inf)
-        out_df = out_df.sort_values(
-            ["rwr_score", "_input_score_sort"],
-            ascending=[False, False],
-            kind="mergesort",
-        ).drop(columns="_input_score_sort").reset_index(drop=True)
+    out_df = pd.DataFrame(rows)
+    out_df = out_df[pd.to_numeric(out_df["n_overlapped_nodes"], errors="coerce").fillna(0) > 0].copy()
+    out_df["_input_score_sort"] = pd.to_numeric(out_df.get("input_score"), errors="coerce").fillna(-np.inf)
+    out_df = out_df.sort_values(
+        ["rwr_score", "_input_score_sort"],
+        ascending=[False, False],
+        kind="mergesort",
+    ).drop(columns="_input_score_sort").reset_index(drop=True)
 
     out_df["local_support_eta"] = float(args.local_support_eta)
     out_df["local_support_max_hops"] = int(args.local_support_max_hops)

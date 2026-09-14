@@ -255,36 +255,6 @@ def build_region_to_nodes_map(regions_df, nodes_coord_df):
     return reg_to_nodes_idx, reg_to_nodes_id
 
 
-def select_seeds_from_network(G, disease_trait=None, seeds_file=None):
-    seeds = set()
-
-    if disease_trait:
-        pat = disease_trait.lower()
-        for n, attrs in G.nodes(data=True):
-            traits = attrs.get("gwas_disease_traits")
-            if traits and pat in str(traits).lower():
-                seeds.add(str(n))
-
-    if seeds_file:
-        with open(seeds_file) as f:
-            for line in f:
-                nid = line.strip()
-                if nid:
-                    seeds.add(nid)
-
-    return seeds
-
-
-def build_seed_vector_from_seed_nodes(nodes, node_to_idx, seeds):
-    s = np.zeros(len(nodes), dtype=np.float64)
-    valid = [node_to_idx[x] for x in seeds if x in node_to_idx]
-    if not valid:
-        return None
-    s[valid] = 1.0
-    s /= s.sum()
-    return s
-
-
 def build_seed_vector_from_region_scores(regions_df, reg_to_nodes_idx, n_nodes, combine_mode="max"):
     """Build a mass-conserving restart vector from region-level scores.
 
@@ -466,16 +436,19 @@ def load_topology_file(path, nodes, min_component_size, use_coreness_penalty):
 
 def parse_args():
     ap = argparse.ArgumentParser(
-        description="Dynamic-edge RWR with component filter and optional coreness penalty."
+        description=(
+            "Context-aware prioritization: dynamic-edge RWR on a cell type-specific rewired network, "
+            "with component filter and optional coreness penalty. Input scores are used as initial "
+            "node heat; without scores, all overlapped nodes start with equal heat."
+        )
     )
     ap.add_argument("--base-edges", required=True)
     ap.add_argument("--edge-override", required=True)
     ap.add_argument("--nodes-index", required=True)
     ap.add_argument("--input-regions", required=True)
 
-    ap.add_argument("--network", default=None)
-    ap.add_argument("--disease-trait", default=None)
-    ap.add_argument("--seeds-file", default=None)
+    ap.add_argument("--network", default=None,
+                    help="Optional pre-built network .gpickle; only used for node annotations in the report")
 
     ap.add_argument("--topology-file", required=True,
                     help="node_topology.tsv.gz with node_id,component_size[,coreness]")
@@ -566,32 +539,13 @@ def main():
             for node, attrs in G.nodes(data=True)
         }
 
-    has_seed_info = bool(args.disease_trait) or bool(args.seeds_file)
-    seed_vec = None
-    seed_mode = None
-
-    if has_seed_info:
-        if args.disease_trait and not args.network:
-            raise ValueError("--network is required when using --disease-trait")
-        seeds = set()
-        if G is not None:
-            seeds = select_seeds_from_network(G, args.disease_trait, args.seeds_file)
-        else:
-            seeds = select_seeds_from_network(None, None, args.seeds_file)
-
-        seed_vec = build_seed_vector_from_seed_nodes(nodes, node_to_idx, seeds)
-        if seed_vec is None:
-            raise ValueError("No valid seeds matched nodes.tsv")
-        seed_mode = "seed_nodes"
-
-    elif has_scores:
+    if has_scores:
         seed_vec, _ = build_seed_vector_from_region_scores(
             regions_df, reg_to_nodes_idx, n_nodes
         )
         if seed_vec is None:
             raise ValueError("Could not build seed vector from input region scores")
         seed_mode = "input_scores"
-
     else:
         seed_vec, _ = build_seed_vector_from_input_regions_binary(
             reg_to_nodes_idx, region_ids, n_nodes

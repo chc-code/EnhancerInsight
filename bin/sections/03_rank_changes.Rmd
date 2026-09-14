@@ -6,7 +6,7 @@ if (!is.null(rank_change_filtered) && "final_score" %in% names(rank_change_filte
     filter(!is.na(final_score), final_score > 0)
 }
 
-show_rank_changes <- mode != "Mode1" &&
+show_rank_changes <- mode != "independent_equal" &&
   !is.null(rank_change_filtered) &&
   nrow(rank_change_filtered) > 0
 

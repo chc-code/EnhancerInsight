@@ -26,12 +26,12 @@ load_tables <- function(report_dir) list(
   direct_heat_flow=read_report_tsv("direct_heat_flow.tsv",report_dir)
 )
 detect_mode <- function(tables) {
-  if (!is.null(tables$ranking) && "rwr_score_adjusted" %in% names(tables$ranking)) return("Mode2B")
-  if (!is.null(tables$rank_change) && all(c("input_score","input_rank","final_score","final_rank") %in% names(tables$rank_change))) return("Mode2A")
-  "Mode1"
+  if (!is.null(tables$ranking) && "rwr_score_adjusted" %in% names(tables$ranking)) return("aware")
+  if (!is.null(tables$rank_change) && all(c("input_score","input_rank","final_score","final_rank") %in% names(tables$rank_change))) return("independent_scores")
+  "independent_equal"
 }
 final_score_col <- function(mode, ranking) {
-  if (mode=="Mode2B") return("rwr_score_adjusted")
+  if (mode=="aware") return("rwr_score_adjusted")
   if (!is.null(ranking) && "rwr_score" %in% names(ranking)) return("rwr_score")
   if (!is.null(ranking) && "final_score" %in% names(ranking)) return("final_score")
   NULL
