@@ -457,6 +457,12 @@ def support(file1: Path, file2: Path) -> None:
     run_cmd(
         f"awk -F'\t' -v OFS='\t' '{{print $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12}}' {quote(str(file1) + '.temp7.bed')} | sort -k1,1 -k2,2n > {quote(file2)}"
     )
+    
+    # cleanup
+    try:
+        run_cmd(f'rm {quote(str(file1) + ".temp*.bed")}')
+    except:
+        pass
 
 
 def target_gene(file1: Path, file2: Path) -> None:
